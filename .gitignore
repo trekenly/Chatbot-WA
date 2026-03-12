@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# SSH Keys
+id_rsa
+id_rsa.pub
+*.pem
+
+# OS
+.DS_Store
+desktop.ini
+Thumbs.db
+
+# Environment
+.env

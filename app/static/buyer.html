@@ -1,0 +1,902 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BusX Buyer Chat</title>
+
+  <style>
+    :root{
+      /* Premium theme tokens (Dark = default) */
+      --bg:#0B0F14;          /* ink */
+      --surface:#111827;     /* card */
+      --surface2:#0F172A;    /* elevated */
+      --text:#F5F7FA;
+      --muted:#A7B0BE;
+      --border: rgba(255,255,255,.10);
+      --glass: rgba(255,255,255,.06);
+      --accent:#C8A96A;      /* champagne */
+      --accent2:#9B824F;     /* pressed/hover */
+      --good:#22c55e;
+      --radius: 22px;
+      --radius2: 16px;
+      --radius3: 999px;
+      --shadow: none;
+      --shadow2: none;
+      --font: ui-sans-serif, system-ui, -apple-system, "SF Pro Display", "SF Pro Text", Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      --ring: 0 0 0 4px rgba(200,169,106,.18);
+      --ring2: 0 0 0 2px rgba(255,255,255,.16), 0 0 0 6px rgba(200,169,106,.14);
+    }
+
+    /* Light mode tokens */
+    @media (prefers-color-scheme: light){
+      :root{
+        --bg:#F7F7F8;
+        --surface:#FFFFFF;
+        --surface2:#F2F4F7;
+        --text:#101828;
+        --muted:#667085;
+        --border: rgba(16,24,40,.12);
+        --glass: rgba(16,24,40,.04);
+        --accent:#B08A3C;
+        --accent2:#8F6F2F;
+        --shadow: none;
+        --shadow2: none;
+        --ring: 0 0 0 4px rgba(176,138,60,.16);
+        --ring2: 0 0 0 2px rgba(16,24,40,.08), 0 0 0 6px rgba(176,138,60,.14);
+      }
+    }
+    *{ box-sizing:border-box; }
+    html{ font-family: var(--font); }
+    body{
+      margin:0;
+      color:var(--text);
+      background:
+        radial-gradient(1200px 800px at 20% -10%, rgba(200,169,106,.10), transparent 60%),
+        radial-gradient(900px 700px at 90% 10%, rgba(200,169,106,.06), transparent 55%),
+        linear-gradient(180deg, rgba(15,23,42,.25), rgba(11,15,20,1));
+    }
+
+    @media (prefers-color-scheme: light){
+      body{
+        background:
+          radial-gradient(1200px 800px at 20% -10%, rgba(176,138,60,.10), transparent 60%),
+          radial-gradient(900px 700px at 90% 10%, rgba(176,138,60,.06), transparent 55%),
+          linear-gradient(180deg, #ffffff, var(--bg));
+      }
+    }
+    .wrap{ max-width: 980px; margin:0 auto; padding:14px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+    .header{
+      position: sticky; top:0; z-index:60;
+      display:grid; grid-template-columns: auto 1fr auto;
+      align-items:center; gap:12px;
+      padding:12px; margin:-14px -14px 14px -14px;
+      background: color-mix(in srgb, var(--bg) 70%, transparent);
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    .brand{ display:flex; align-items:center; gap:10px; min-width:0;}
+    .logo{
+      width: 34px; height: 34px; border-radius: 12px;
+      background:
+        radial-gradient(120% 120% at 25% 0%, rgba(200,169,106,.40), transparent 55%),
+        linear-gradient(135deg, rgba(17,24,39,1), rgba(15,23,42,1));
+      box-shadow: none;
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, rgba(255,255,255,.10));
+    }
+    .brandText{ display:flex; flex-direction:column; line-height:1.05; }
+    .brandText .t{ font-weight: 900; letter-spacing:.2px; font-size: 14px; }
+    .brandText .s{ font-size: 12px; color: rgba(255,255,255,.62); }
+
+    @media (prefers-color-scheme: light){
+      .brandText .s{ color: rgba(16,24,40,.55); }
+    }
+    .summary{ display:flex; align-items:center; justify-content:center; min-width:0; }
+    /* Header center is a single compact row (phone-safe) */
+    .headerCenter{ display:flex; flex-direction:row; align-items:center; justify-content:center; gap:0; min-width:0; }
+    .headerTrip{
+      display:flex; gap:8px; align-items:center;
+      padding:0;
+      border:none;
+      border-radius: 0;
+      background: transparent;
+      font-size: 12px;
+      max-width: min(520px, 100%);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: color-mix(in srgb, var(--text) 70%, var(--muted));
+    }
+    .headerTrip strong{ color: var(--text); font-weight: 900; }
+    #htRoute{ overflow:hidden; text-overflow: ellipsis; }
+    #htDate{ flex:0 0 auto; }
+
+    .headerTrip .sep{ opacity:.6; }
+
+    /* Progress dots removed (header is cleaner & saves space) */
+
+    @media (max-width: 520px){
+      .headerTrip{ max-width: 220px; }
+      /* On very small screens, hide the date first to keep actions from wrapping */
+      #htDate, .headerTrip .sep{ display:none; }
+    }
+    .pill{
+      display:flex; gap:8px; align-items:baseline;
+      padding:10px 12px;
+      border-radius: var(--radius3);
+      border:1px solid var(--border);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 70%, transparent), var(--glass));
+      box-shadow: none;
+      min-width:0;
+      max-width: 42%;
+    }
+    .pill .k{ font-size: 11px; letter-spacing:.02em; color: rgba(255,255,255,.62); }
+    .pill .v{ font-weight:850; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    @media (prefers-color-scheme: light){
+      .pill .k{ color: color-mix(in srgb, var(--muted) 95%, #ffffff 5%); }
+    }
+    .actions{ display:flex; gap:10px; align-items:center; flex-wrap:nowrap; }
+    input, button{
+      border-radius: var(--radius2);
+      border:1px solid var(--border);
+      background: var(--glass);
+      color:var(--text);
+      padding:12px 14px;
+      font-size:14px;
+      box-shadow: none;
+    }
+    input{ -webkit-appearance:none; appearance:none; }
+    /* Placeholder should be readable on both light & dark */
+    input::placeholder{
+      color: color-mix(in srgb, var(--muted) 85%, var(--text) 15%);
+      opacity: 1;
+    }
+    input:focus, button:focus{ outline:none; }
+    /* No shadows: use a clean outline focus ring instead */
+    input:focus-visible{ outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+    button:focus-visible{ outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+    button{ cursor:pointer; user-select:none; -webkit-tap-highlight-color: transparent; transition: background .14s ease, border-color .14s ease; }
+    button:hover{ }
+    button:active{ }
+    button:disabled{ opacity:.55; cursor:not-allowed; transform:none; }
+    .ghost{ background: rgba(255,255,255,.05); }
+    .danger{
+      border-color: color-mix(in srgb, #ef4444 34%, var(--border));
+      background: color-mix(in srgb, #ef4444 10%, var(--glass));
+      color: color-mix(in srgb, #ef4444 60%, var(--text));
+      font-weight: 750;
+    }
+    .danger:hover{ border-color: color-mix(in srgb, #ef4444 44%, var(--border)); }
+    .cta{
+      background:
+        radial-gradient(120% 140% at 25% 0%, rgba(255,255,255,.14), transparent 55%),
+        linear-gradient(135deg, color-mix(in srgb, var(--accent) 92%, #ffffff 8%), var(--accent2));
+      border-color: color-mix(in srgb, var(--accent) 40%, rgba(255,255,255,.10));
+      font-weight: 850;
+    }
+    .busyPill{ display:none; gap:0; align-items:center; padding:10px 12px; border-radius: var(--radius3); border:1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.06); font-size: 12px; }
+    .busyPill.show{ display:flex; }
+
+    /* Animated dots (premium, subtle). */
+    /* Global dots (used in chat bubbles + header). */
+    .dots{ display:inline-flex; gap:4px; align-items:flex-end; height:12px; }
+    .dots span{
+      width:5px; height:5px; border-radius:999px;
+      background: color-mix(in oklab, var(--accent) 70%, var(--text) 30%);
+      opacity:.55;
+      transform: translateY(0);
+      animation: busyDotBounce 1s infinite ease-in-out;
+    }
+    .dots span:nth-child(2){ animation-delay: .14s; }
+    .dots span:nth-child(3){ animation-delay: .28s; }
+
+    /* Header busy pill dot container keeps same layout */
+    .busyPill .dots{ display:inline-flex; gap:4px; align-items:flex-end; height:12px; }
+    .busyPill .dots span{
+      width:5px; height:5px; border-radius:999px;
+      background: color-mix(in oklab, var(--accent) 70%, var(--text) 30%);
+      opacity:.55;
+      transform: translateY(0);
+      animation: busyDotBounce 1s infinite ease-in-out;
+    }
+    .busyPill .dots span:nth-child(2){ animation-delay: .14s; }
+    .busyPill .dots span:nth-child(3){ animation-delay: .28s; }
+    @keyframes busyDotBounce{
+      0%, 80%, 100% { transform: translateY(0); opacity:.55; }
+      40% { transform: translateY(-5px); opacity:1; }
+    }
+    .spinner{ width:10px; height:10px; border-radius:50%; border:2px solid rgba(255,255,255,.25); border-top-color: var(--accent); animation: spin .7s linear infinite; }
+
+    @media (prefers-color-scheme: light){
+      .spinner{ border-color: rgba(16,24,40,.20); border-top-color: var(--accent); }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .chat{
+      background: linear-gradient(180deg, var(--glass), color-mix(in srgb, var(--surface) 55%, transparent));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding:16px;
+      height: calc(100svh - 170px);
+      overflow:auto;
+      box-shadow: none;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+
+    /* scrollbars (desktop + android) */
+    .chat{ scrollbar-gutter: stable both-edges; }
+    .chat::-webkit-scrollbar{ width: 10px; }
+    .chat::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.12); border-radius: 999px; border: 2px solid rgba(0,0,0,.20); }
+    .chat::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.18); }
+
+    @media (prefers-color-scheme: light){
+      .chat::-webkit-scrollbar-thumb{ background: rgba(16,24,40,.14); border: 2px solid rgba(255,255,255,.60); }
+      .chat::-webkit-scrollbar-thumb:hover{ background: rgba(16,24,40,.20); }
+    }
+
+    @media (max-width: 560px){
+      .chat{ height: calc(100svh - 196px); padding:14px; }
+      .pill{ max-width: none; flex: 1 1 30%; }
+      .summary{ width:100%; order: 3; }
+      .brand{ flex: 1 1 auto; }
+    }
+
+    .msg{ display:flex; gap:10px; margin:12px 0; align-items:flex-end; }
+    .msg.user{ justify-content:flex-end; }
+    .msg.user .content{ order:1; }
+    .msg.user .avatar{ order:2; }
+
+    .avatar{
+      width: 34px; height: 34px; border-radius: 14px;
+      display:flex; align-items:center; justify-content:center;
+      font-weight: 900; font-size: 12px; letter-spacing:.4px;
+      border: 1px solid var(--border);
+      background: var(--glass);
+      box-shadow: none;
+      flex: 0 0 auto;
+    }
+    .avatar.bot{
+      background:
+        radial-gradient(120% 140% at 25% 0%, rgba(200,169,106,.20), transparent 60%),
+        linear-gradient(135deg, rgba(17,24,39,.22), rgba(15,23,42,.10));
+      border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
+    }
+    .avatar.user{
+      background:
+        radial-gradient(120% 140% at 25% 0%, rgba(200,169,106,.14), transparent 60%),
+        linear-gradient(135deg, rgba(15,23,42,.22), rgba(17,24,39,.10));
+      border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+    }
+    .msg .content{ display:flex; flex-direction:column; gap:6px; max-width: 92%; }
+
+    /* In-bubble time badge (WhatsApp-like)
+       - No shadows
+       - Champagne outline + soft warm fill
+    */
+    .btime{
+      position:absolute;
+      right:10px;
+      bottom:8px;
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .1px;
+      color: color-mix(in srgb, var(--muted) 94%, var(--text) 6%);
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: none;
+      background: transparent;
+      opacity: .42;
+      pointer-events: none;
+    }
+    .msg:hover .btime, .msg:focus-within .btime{ opacity: .72; background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+
+    @media (prefers-color-scheme: light){
+      .btime{
+        color: rgba(16,24,40,.70);
+        background: color-mix(in srgb, var(--accent) 18%, #FFFFFF);
+      }
+    }
+
+    /* Inner "card on top of bubble" (WhatsApp-like content panel)
+       - Content sits on a slightly lighter panel for premium readability
+    */
+    .bubbleInner{
+      /* Keep tiny messages from looking lost (mobile-safe) */
+      min-width: clamp(220px, 52vw, 420px);
+      width: fit-content;
+      border-radius: 14px;
+      padding: 12px 14px;
+      padding-bottom: 28px; /* reserve space for in-bubble time */
+      background:
+        radial-gradient(120% 160% at 45% 0%, rgba(200,169,106,.16), transparent 60%),
+        color-mix(in srgb, var(--surface) 86%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    @media (prefers-color-scheme: light){
+      .bubbleInner{
+        background:
+          radial-gradient(120% 160% at 45% 0%, rgba(176,138,60,.14), transparent 60%),
+          #FFFFFF;
+        border-color: color-mix(in srgb, var(--accent) 28%, rgba(16,24,40,.14));
+      }
+    }
+    /*
+      "No bubbles" mode:
+      Keep the message container for layout + time placement,
+      but remove the outer bubble chrome. The readable surface is bubbleInner.
+    */
+    .bubble{
+      max-width: 100%;
+      min-width: 0;
+      width: auto;
+      border-radius: 0;
+      position: relative;
+      padding: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      white-space: normal;
+    }
+
+    /* On very small screens, allow surfaces to shrink safely */
+    @media (max-width: 360px){
+      .bubbleInner{ min-width: 0; width: 100%; }
+    }
+    .bubble strong{ font-weight: 900; }
+    /* User surface variant (slightly warmer so it's still easy to parse who said what) */
+    .msg.user .bubbleInner{
+      background:
+        radial-gradient(120% 160% at 45% 0%, rgba(200,169,106,.18), transparent 60%),
+        color-mix(in srgb, var(--surface) 82%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+    }
+
+    /* Light mode bubble "card" look like the reference: warm surface + soft center highlight */
+    @media (prefers-color-scheme: light){
+      /* No outer bubble in light mode either */
+      .msg.user .bubbleInner{
+        background:
+          radial-gradient(120% 160% at 45% 0%, rgba(176,138,60,.16), transparent 60%),
+          #FFFFFF;
+        border-color: color-mix(in srgb, var(--accent) 34%, rgba(16,24,40,.12));
+      }
+    }
+    .menu{ margin-top: 12px; display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 560px){ .menu{ grid-template-columns: 1fr; } }
+    .choice{ width: 100%; text-align: left; font-weight: 850; }
+    .choice.primary{ border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: none; }
+    .choice.danger{
+      border-color: color-mix(in srgb, #ef4444 34%, var(--border));
+      background: color-mix(in srgb, #ef4444 10%, var(--glass));
+      color: color-mix(in srgb, #ef4444 62%, var(--text));
+    }
+
+    @media (prefers-color-scheme: light){
+      .bubble{ box-shadow: none; }
+    }
+    .footer{ display:flex; gap: 10px; margin-top: 14px; position: sticky; bottom: 10px; z-index: 20; }
+    #text{ flex: 1 1 auto; }
+    #datePicker{ position: fixed; left: -10000px; top: -10000px; }
+    .hint{ margin-top: 10px; color: rgba(255,255,255,.55); font-size: 12px; }
+
+    @media (prefers-color-scheme: light){
+      .meta{ color: color-mix(in srgb, var(--muted) 92%, #ffffff 8%); }
+      .hint{ color: color-mix(in srgb, var(--muted) 92%, #ffffff 8%); }
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* Seat map bubble */
+    /* --------------------------------------------------------------------- */
+    .bubble.seatmap .bubbleInner{ padding: 14px; padding-bottom: 40px; width: 100%; min-width: 0; }
+    .seatmap-head{ display:flex; flex-direction:column; gap:4px; margin-bottom:10px; }
+    .seatmap-top{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+    .seatmap-title{ font-weight: 850; letter-spacing: .2px; }
+    .seatmap-sub{ font-size: 12px; color: rgba(255,255,255,.70); }
+
+    .seatmap-fs{
+      border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-weight: 800;
+      font-size: 12px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .seatmap-selected{
+      font-size: 12px;
+      color: color-mix(in srgb, var(--muted) 92%, var(--text) 8%);
+      margin-top: 2px;
+    }
+    .seatmap-legend{ display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .seatmap-chip{
+      display:flex; align-items:center; gap:6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .seatmap-dot{ width:10px; height:10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; }
+    .seatmap-dot.avail{ border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+    .seatmap-dot.sel{ border-color: color-mix(in srgb, var(--accent) 70%, var(--border)); background: color-mix(in srgb, var(--accent) 34%, transparent); }
+    .seatmap-dot.unavail{ border-color: var(--border); background: color-mix(in srgb, var(--muted) 24%, transparent); opacity: .65; }
+    .seatmap-dot.fix{ border-color: color-mix(in srgb, var(--accent) 14%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--surface2)); opacity: .85; }
+
+    @media (prefers-color-scheme: light){
+      .seatmap-sub{ color: color-mix(in srgb, var(--muted) 92%, #ffffff 8%); }
+      .seatmap-grid{
+        background: color-mix(in srgb, var(--surface2) 70%, transparent);
+        border-color: var(--border);
+      }
+    }
+
+    .seatmap-grid{
+      display:grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      padding: 10px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.08);
+      max-height: 320px;
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    @media (max-width: 520px){
+      .seatmap-grid{ grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    }
+
+    /* Fullscreen seat map (mobile friendly, no shadows) */
+    .bubble.seatmap.fullscreen{
+      position: fixed;
+      left: 10px;
+      right: 10px;
+      top: 10px;
+      bottom: calc(10px + env(safe-area-inset-bottom));
+      z-index: 999;
+      max-width: none;
+      width: auto;
+    }
+    html.seatFull{ overflow: hidden; }
+    .bubble.seatmap.fullscreen .seatmap-grid{
+      max-height: none;
+      height: calc(100vh - 260px);
+    }
+    @media (max-width: 520px){
+      .bubble.seatmap.fullscreen .seatmap-grid{ height: calc(100vh - 280px); }
+    }
+
+    /* Real seat chart (from BusX seat_layout_details) */
+    .seatmap-grid.seatmap-grid-real{
+      grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+      gap: 10px;
+    }
+    .seatmap-cell{
+      height: 44px;
+      border-radius: 14px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight: 700;
+      font-size: 12px;
+      user-select:none;
+    }
+    .seatmap-cell.is-empty{
+      background: transparent;
+      border: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+      opacity: .18;
+    }
+    .seatmap-cell.is-fixture{
+      background: color-mix(in srgb, var(--accent) 6%, var(--surface2));
+      border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
+      color: color-mix(in srgb, var(--text) 82%, var(--muted));
+      opacity: .7;
+      letter-spacing: .04em;
+    }
+
+    .seatmap-floors{
+      display:flex;
+      gap: 8px;
+      padding: 2px 2px 10px;
+      flex-wrap: wrap;
+    }
+    .seatmap-floor{
+      border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .seatmap-floor.active{
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+
+    .seatmap-grid .seat.unavailable{
+      opacity: .45;
+      cursor: not-allowed;
+    }
+
+    .seatmap-grid .seat{
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+      background: color-mix(in srgb, var(--accent) 7%, transparent);
+      color: var(--text);
+      border-radius: 14px;
+      padding: 10px 8px;
+      font-weight: 850;
+      font-size: 13px;
+      cursor: pointer;
+      box-shadow: none; /* override global button shadow to keep it clean */
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .seatmap-grid .seat:hover{ border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .seatmap-grid .seat.selected{ border-color: color-mix(in srgb, var(--accent) 65%, var(--border)); background: color-mix(in srgb, var(--accent) 26%, transparent); }
+
+    .seatmap-foot{ display:flex; justify-content: space-between; gap:10px; margin-top: 12px; }
+    .seatmap-modes{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .seatmap-mode{ border: 1px solid var(--border); background: transparent; color: var(--text); padding: 8px 10px; border-radius: 999px; font-size: 12px; font-weight: 850; }
+    .seatmap-mode.active{ border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .seatmap-clear, .seatmap-confirm{
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 850;
+      box-shadow: none; /* override global button shadow */
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .seatmap-confirm{ border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .seatmap-clear:hover, .seatmap-confirm:hover{ border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .seatmap-confirm:disabled, .seatmap-clear:disabled{ opacity: .45; cursor: not-allowed; }
+
+    /* Light-mode seat map styling (flat, premium, champagne outline) */
+    @media (prefers-color-scheme: light){
+      .seatmap-grid{ background: #F7F4EE; border-color: rgba(16,24,40,.10); }
+      .seatmap-grid .seat{
+        background: #F2EEE6;
+        border-color: color-mix(in srgb, var(--accent) 70%, rgba(16,24,40,.10));
+        color: #101828;
+      }
+      .seatmap-grid .seat:hover{ background: #EFE8DD; border-color: var(--accent); }
+      .seatmap-grid .seat.selected{ background: color-mix(in srgb, var(--accent) 22%, #F2EEE6); border-color: var(--accent); }
+      .seatmap-clear, .seatmap-confirm{ background: #F2EEE6; color:#101828; border-color: color-mix(in srgb, var(--accent) 55%, rgba(16,24,40,.10)); }
+      .seatmap-confirm{ background: color-mix(in srgb, var(--accent) 16%, #F2EEE6); border-color: var(--accent); }
+    }
+
+    .seatmap-auto{
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+      background: color-mix(in srgb, var(--accent) 9%, transparent);
+      color: var(--text);
+      cursor: pointer;
+      font-weight: 850;
+      box-shadow: none;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .seatmap-auto:hover{ border-color: color-mix(in srgb, var(--accent) 46%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .seatmap-auto:disabled{ opacity: .45; cursor: not-allowed; }
+
+    @media (prefers-color-scheme: light){
+      .seatmap-auto{ background: #F2EEE6; color:#101828; border-color: color-mix(in srgb, var(--accent) 65%, rgba(16,24,40,.10)); }
+      .seatmap-auto:hover{ background: #EFE8DD; border-color: var(--accent); }
+    }
+  
+
+/* Traveler summary (clean + bold key info) */
+.travsum{ display:grid; gap:10px; }
+.travsum-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.travsum-title{ font-size:14px; letter-spacing:.2px; }
+.travsum-paytimer{
+  font-size:12px;
+  opacity:.78;
+  padding: 6px 10px;
+  border-radius: 999px;
+  width: fit-content;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface2));
+}
+.travsum-paytimer:empty{ display:none; }
+.travsum-rows{ display:grid; gap:8px; }
+.travsum-row{ display:grid; grid-template-columns: 92px 1fr; gap:10px; align-items:center; }
+.travsum-label{ font-size:12px; opacity:.72; }
+.travsum-value{ font-size:14px; display:flex; align-items:center; justify-content:space-between; gap:10px; min-width:0; }
+.travsum-val{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.travsum-meta{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-top:2px;
+}
+.travsum-meta-left{
+  font-size:12px;
+  opacity:.86;
+}
+.travsum-countdown{
+  font-size:12px;
+  font-weight:700;
+  padding:6px 10px;
+  border-radius:999px;
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface2) 82%);
+  color: var(--text);
+  white-space:nowrap;
+}
+
+.travsum-nextline{
+  font-size:13px;
+  line-height:1.35;
+  padding:10px 12px;
+  border-radius:14px;
+  background: radial-gradient(120% 120% at 50% 0%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 70%),
+              color-mix(in oklab, var(--surface2) 90%, var(--accent) 10%);
+}
+.travsum-nextline strong{ font-weight:850; }
+
+.travsum-details summary{
+  cursor:pointer;
+  user-select:none;
+  font-size:12px;
+  opacity:.70;
+  list-style:none;
+}
+.travsum-details summary::-webkit-details-marker{ display:none; }
+.travsum-details-body{ margin-top:8px; display:grid; gap:6px; font-size:12px; opacity:.75; }
+
+/* Copy button (Booking ID / Payment code) */
+.copyBtn{
+  margin-left: 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-weight: 850;
+  font-size: 12px;
+  line-height: 1;
+}
+.copyBtn:active{ transform: none; }
+.copyBtn.copied{ opacity: .9; }
+
+/* Skeletons (premium loading placeholders) */
+.bubble.skeleton .bubbleInner{ padding: 14px; }
+.skel-line{
+  height: 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  margin: 10px 0;
+  animation: skelPulse 1.2s ease-in-out infinite;
+}
+.skel-line.short{ width: 60%; }
+@keyframes skelPulse{
+  0%{ opacity: .55; }
+  50%{ opacity: .85; }
+  100%{ opacity: .55; }
+}
+
+/* Busy state (JS disables buttons too) */
+html.isBusy .bubble{ opacity: .98; }
+
+/* Compact payment row (one-screen friendly) */
+.travsum-paycompact{
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface2));
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+}
+.travsum-payref{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+.travsum-payref-val{ font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.travsum-payactions{ display:flex; gap: 8px; align-items:center; flex: 0 0 auto; }
+.travsum-payactions button{
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space:nowrap;
+}
+.travsum-payactions button:hover{ border-color: color-mix(in srgb, var(--accent) 22%, var(--border)); }
+
+/* Tiny next hint (no big panel) */
+.travsum-nextmini{
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.3;
+  opacity: .92;
+}
+.travsum-nextmini-k{ font-weight: 850; margin-right: 6px; }
+.travsum-nextmini-v strong{ font-weight: 900; }
+
+/* Make countdown chip subtle and small when used inline */
+.travsum-countdown.mini{
+  display:inline-flex;
+  align-items:center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  font-size: 11px;
+  font-weight: 750;
+  opacity: .8;
+}
+
+/* (Removed) Sticky trip summary bar to save vertical real-estate */
+
+  
+.travsum-payactions{ flex-wrap: wrap; justify-content: flex-end; }
+.cmdPayBtn,.cmdStatusBtn{ padding:6px 10px; font-size:12px; }
+.cmdPayBtn{ opacity:.9; }
+.cmdStatusBtn{ opacity:.8; }
+@media (max-width:420px){
+  .travsum-payactions{ justify-content:flex-start; }
+}
+
+
+    /* === Scroll + layout fix (single scroll area) === */
+    html, body { height: 100%; }
+    body { overflow: hidden; overscroll-behavior: none; }
+
+    /* Use a column layout so only .chat scrolls (no double scrollbars) */
+    .wrap{
+      height: 100svh;
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+    }
+    .header{ flex: 0 0 auto; }
+    .footer, .composer{ flex: 0 0 auto; }
+
+    .chat{
+      flex: 1 1 auto;
+      min-height: 0;      /* critical: allows the flex child to shrink and scroll */
+      height: auto;       /* override old calc height */
+      overflow: auto;
+      scrollbar-gutter: stable both-edges;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 14px; /* keep content away from the scrollbar */
+    }
+
+
+/* Ticket + manage cards */
+.tkt-card, .mg-card{
+  display:grid;
+  gap:10px;
+  padding: 12px 12px;
+  border-radius: 16px;
+  background: transparent;
+}
+.tkt-title, .mg-title{ font-size:14px; }
+.tkt-meta{ font-size:12px; opacity:.8; }
+.tkt-list{ display:grid; gap:8px; }
+.tkt-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 10px;
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--surface2) 85%, var(--accent) 15%);
+}
+.tkt-actions{ display:flex; gap:8px; }
+.mini{
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, var(--accent) 30%);
+  background: color-mix(in oklab, var(--surface) 88%, var(--accent) 12%);
+  font-weight: 600;
+  font-size: 12px;
+}
+.mg-line{ font-size:13px; }
+.mg-details summary{ cursor:pointer; font-size:12px; opacity:.8; }
+.mg-pre{
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--surface2) 92%, var(--accent) 8%);
+  font-size: 11px;
+  overflow:auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Passenger details form */
+.pd-form{ display:grid; gap:10px; }
+.pd-field{ display:grid; gap:6px; }
+.pd-label{ font-size:12px; opacity:.8; font-weight:700; }
+.pd-field input, .pd-field select{
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, var(--accent) 30%);
+  background: color-mix(in oklab, var(--surface2) 92%, var(--accent) 8%);
+  color: var(--text);
+  padding: 0 12px;
+  outline: none;
+}
+.pd-row2{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+.pd-error{ margin-top: 4px; font-size: 12px; font-weight: 700; color: #b91c1c; }
+/* Keep the Continue button spacing consistent with the 10px rhythm used in the form.
+   Actions live outside the <form>, so we mirror the same gap with margin-top. */
+.pd-actions{ margin-top: 10px; display:grid; gap:10px; }
+.pd-actions .choice{ text-align:center; }
+
+
+    @media (max-width: 420px){
+      .brandText .s{ display:none; }
+      .ghost{ padding:8px 10px; font-size:12px; }
+      .actions{ gap:8px; }
+      .headerTrip{ font-size:11px; padding:7px 10px; }
+      /* .progressDots removed */
+    }
+
+</style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div class="brandText">
+          <div class="t">BusX</div>
+          <div class="s">Premium Buyer Chat</div>
+        </div>
+      </div>
+      <div class="summary">
+        <div class="headerCenter" aria-label="Trip progress">
+          <div class="headerTrip" id="headerTrip">
+            <span id="htDate">—</span>
+            <span class="sep">•</span>
+            <strong id="htRoute">Choose trip</strong>
+          </div>
+          <!-- progress dots removed -->
+        </div>
+      </div>
+      <div class="actions">
+        <div class="busyPill" id="busyPill">
+          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span id="busyText" class="srOnly">Working…</span>
+        </div>
+        <button id="manageBtn" class="ghost" type="button" style="display:none">Manage</button>
+        <button id="resetBtn" class="ghost" type="button">Reset</button>
+      </div>
+    </div>
+
+    <div class="chat" id="chat"></div>
+
+    <div class="footer" id="footerBar">
+      <input id="text" autocomplete="off" placeholder="Type here…" />
+      <button id="sendBtn" type="button" class="cta">Send</button>
+    </div>
+
+    <div class="hint">Tap-first UI: choices appear inside chat bubbles. Keyboard is optional.</div>
+  </div>
+
+  <input id="datePicker" type="date" />
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

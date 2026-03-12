@@ -1,0 +1,5 @@
+# Patch snippet for app/core/orchestrator.py
+# Add this import near the top of the file:
+from app.formatters.reservation_card import format_reservation_card
+
+# Then use format_reservation_card(...) in the confirmation / reservation-created path.

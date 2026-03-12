@@ -1,0 +1,121 @@
+Server Specs & Setup for Production
+Minimum Hardware (for your current load)
+
+CPU:    2 vCPUs
+RAM:    2 GB
+Disk:   20 GB SSD
+OS:     Ubuntu 22.04 LTS or 24.04 LTS
+For up to ~500 concurrent WhatsApp sessions this is fine. The app is I/O bound (BusX API calls), not CPU bound.
+
+Comfortable headroom (recommended):
+
+
+CPU:    4 vCPUs
+RAM:    4 GB
+Disk:   40 GB SSD
+Software Stack Required
+
+Python      3.11+ (your code uses 3.12 features)
+nginx       Latest (reverse proxy + SSL termination)
+certbot     For Let's Encrypt SSL certificate
+supervisor  Process manager (keeps uvicorn alive)
+ufw         Firewall
+Domain & SSL (Required for Meta)
+Meta requires HTTPS for webhook URLs. You need:
+
+A domain name pointed to your server IP (e.g. bot.yourcompany.com)
+SSL certificate via Let's Encrypt (free)
+Complete Setup Commands
+1. System prep
+
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3.12 python3.12-venv python3-pip nginx certbot python3-certbot-nginx supervisor ufw git
+2. Firewall
+
+
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+3. Deploy your app
+
+
+# Create app user
+sudo useradd -m -s /bin/bash chatbot
+sudo su - chatbot
+
+# Clone/upload your project
+git clone <your-repo> /home/chatbot/app
+cd /home/chatbot/app
+
+# Setup venv
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+4. Environment file
+
+
+# /home/chatbot/app/.env  (chmod 600 — never world-readable)
+chmod 600 /home/chatbot/app/.env
+5. Supervisor config (/etc/supervisor/conf.d/chatbot.conf)
+
+
+[program:chatbot]
+command=/home/chatbot/app/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+directory=/home/chatbot/app
+user=chatbot
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/chatbot/out.log
+stderr_logfile=/var/log/chatbot/err.log
+environment=HOME="/home/chatbot",USER="chatbot"
+
+sudo mkdir -p /var/log/chatbot
+sudo supervisorctl reread && sudo supervisorctl update
+sudo supervisorctl start chatbot
+6. Nginx config (/etc/nginx/sites-available/chatbot)
+
+
+server {
+    server_name bot.yourcompany.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+
+    # Limit request body size (security)
+    client_max_body_size 1M;
+}
+
+sudo ln -s /etc/nginx/sites-available/chatbot /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+7. SSL certificate
+
+
+sudo certbot --nginx -d bot.yourcompany.com
+8. Update Meta webhook URL
+Change from ngrok URL to:
+
+
+https://bot.yourcompany.com/channels/whatsapp/webhook
+After Go-Live: Add Webhook Signature Verification
+Add your Meta App Secret to .env:
+
+
+WHATSAPP_APP_SECRET=your_meta_app_secret_here
+Then I can add the signature verification to the webhook handler — this is the most critical security fix before going live.
+
+Checklist Before Go-Live
+ Domain DNS pointed to server IP
+ SSL certificate active
+ .env permissions set to 600
+ Meta webhook URL updated and verified
+ Webhook signature verification added
+ Supervisor keeping app alive
+ Firewall blocking everything except 22/80/443
+What's the server IP or domain name you'll be using? I can tailor the nginx config exactly.

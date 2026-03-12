@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://busx.example/schemas/TripSearchRequest.schema.json",
+  "title": "TripSearchRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "journey_type": {
+      "type": "string",
+      "enum": ["OW", "RT"],
+      "description": "OW=one-way, RT=round-trip"
+    },
+    "departure_date": {
+      "type": "string",
+      "format": "date",
+      "description": "YYYY-MM-DD"
+    },
+    "return_date": {
+      "type": "string",
+      "format": "date",
+      "description": "YYYY-MM-DD (required if journey_type=RT)"
+    },
+    "from": { "$ref": "#/$defs/LocationRef" },
+    "to": { "$ref": "#/$defs/LocationRef" },
+    "passengers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adult_count": { "type": "integer", "minimum": 1, "maximum": 20, "default": 1 },
+        "child_count": { "type": "integer", "minimum": 0, "maximum": 20, "default": 0 },
+        "infant_count": { "type": "integer", "minimum": 0, "maximum": 20, "default": 0 },
+        "senior_count": { "type": "integer", "minimum": 0, "maximum": 20, "default": 0 }
+      },
+      "required": ["adult_count"]
+    },
+    "currency": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 3,
+      "default": "THB"
+    },
+    "locale": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 15,
+      "default": "en_US",
+      "description": "BCP47-ish or provider locale like en_US, th_TH, zh_CN"
+    },
+    "time_zone": {
+      "type": "string",
+      "default": "Asia/Bangkok"
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "earliest_departure_time": {
+          "type": "string",
+          "pattern": "^\\d{2}:\\d{2}$",
+          "description": "HH:MM"
+        },
+        "latest_departure_time": {
+          "type": "string",
+          "pattern": "^\\d{2}:\\d{2}$",
+          "description": "HH:MM"
+        },
+        "cabin_class_name": {
+          "type": "string",
+          "description": "Optional filter, e.g. VIP 24"
+        },
+        "carrier_name": {
+          "type": "string",
+          "description": "Optional filter, e.g. BusX Demo"
+        }
+      }
+    },
+    "raw_user_text": {
+      "type": "string",
+      "description": "Original unstructured request (useful for audit/debug)"
+    },
+    "source_language": {
+      "type": "string",
+      "description": "Detected language code, e.g. th, en, zh"
+    }
+  },
+  "required": ["journey_type", "departure_date", "from", "to", "passengers"],
+  "allOf": [
+    {
+      "if": { "properties": { "journey_type": { "const": "RT" } }, "required": ["journey_type"] },
+      "then": { "required": ["return_date"] }
+    }
+  ],
+  "$defs": {
+    "LocationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keyword_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Preferred when you have it (fast + unambiguous)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free text location/station/city name (LLM->normalize->keyword_id later)."
+        },
+        "province": { "type": "string" },
+        "station_code": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" }
+      },
+      "anyOf": [
+        { "required": ["keyword_id"] },
+        { "required": ["name"] }
+      ]
+    }
+  }
+}
