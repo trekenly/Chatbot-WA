@@ -41,7 +41,6 @@ import json
 import logging
 import os
 import time
-import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -145,41 +144,28 @@ async def _send(
 
 async def _process(phone: str, user_text: str, phone_number_id: str, token: str) -> None:
     """
-    Load session → call orchestrator → render → send WhatsApp reply.
+    Load session → run pipeline (intent + language + translate) → render → send.
     Runs as a background task so we return 200 to Meta immediately.
     """
     state = _get_state(phone)
 
     try:
-        from app.main import _handle_chat_core
-        from app.core.buyer_guide import BuyerGuide
+        from app.channels.pipeline import run_pipeline
         from app.channels.render import render_whatsapp
-        from app.channels.pipeline import _envelope_from_guided
 
-        payload: Dict[str, Any] = {
-            "user_id":    f"wa_{phone}",
-            "text":       user_text,
-            "locale":     "en_US",
-            "time_zone":  "Asia/Bangkok",
-            "currency":   "THB",
-            "state":      state,
-            "use_intent": True,
-        }
+        envelope = await run_pipeline(
+            user_id       = f"wa_{phone}",
+            text          = user_text,
+            incoming_state= state,
+            locale        = "en_US",
+            time_zone     = "Asia/Bangkok",
+            currency      = "THB",
+        )
 
-        class _FakeRequest:
-            class _URL:
-                def __str__(self):   return "http://localhost:8000/"
-                def rstrip(self, c): return str(self).rstrip(c)
-            base_url = _URL()
+        # Persist state (includes chat_language for next turn)
+        _set_state(phone, envelope.state or {})
 
-        resp     = await _handle_chat_core(payload, _FakeRequest())
-        _set_state(phone, resp.state or {})
-
-        # Build envelope then render through the canonical WhatsApp renderer.
-        # This gives us: date/pax/confirm buttons, destination/departure lists,
-        # trip lists with context labels, seatmap ASCII, type-hint stripping.
-        guided   = BuyerGuide().render(resp)
-        envelope = _envelope_from_guided(guided, resp)
+        # Render the (already-translated) envelope for WhatsApp
         wa_payload = render_whatsapp(envelope, phone)
 
         if wa_payload.get("type") == "interactive":

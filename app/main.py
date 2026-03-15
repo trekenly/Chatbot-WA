@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
+import base64 as _base64
 import hashlib
 import hmac
 import json
@@ -12,6 +13,7 @@ import os
 import re
 import tempfile
 import time as _time
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Type
@@ -34,9 +36,7 @@ from app.core.contracts import Action, Ask, AskOption, ChatEnvelope, ChatRespons
 from app.core.orchestrator import Orchestrator
 from app.core.text_extract import extract_from_to
 from app.channels.pipeline import init_pipeline, is_schedule_intent as _is_schedule_intent, normalize_date_text as _normalize_date_text, filter_kwargs as _filter_kwargs_for_callable, envelope_from_guided as _envelope_from_guided
-from app.whatsapp.payloads import build_whatsapp_payload_from_guided, build_whatsapp_payloads_from_guided
-from app.whatsapp.helpers import parse_whatsapp_inbound as _parse_whatsapp_inbound, whatsapp_text_from_guided as _whatsapp_text_from_guided, make_wa_upload_media, wa_image_payload as _wa_image_payload
-from app.seatmap.seatmap import extract_available_seats as _extract_available_seats, recommended_seats as _recommended_seats, seatmap_image_file as _seatmap_image_file
+from app.whatsapp.helpers import parse_whatsapp_inbound as _parse_whatsapp_inbound
 
 app = FastAPI(title="BusX Chatbot", version="0.1.0")
 
@@ -143,8 +143,13 @@ def _should_force_ask_date(state: Dict[str, Any]) -> bool:
     return True
 
 
+import sys as _sys
+
 @app.exception_handler(Exception)
 async def all_exception_handler(request: Request, exc: Exception):
+    _sys.stderr.write(f"\nUNHANDLED EXCEPTION on {request.method} {request.url.path}: {exc.__class__.__name__}: {exc}\n")
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=_sys.stderr)
+    _sys.stderr.flush()
     return JSONResponse(
         status_code=500,
         content={"error": str(exc), "type": exc.__class__.__name__},
@@ -908,7 +913,9 @@ async def debug_search_trips(payload: dict):
 
 @app.on_event("startup")
 async def _startup_init_pipeline():
-    init_pipeline(busx)
+    # Share the module-level `orch` instance so that _handle_chat_core and
+    # run_pipeline both operate on the same in-memory session store.
+    init_pipeline(busx, orchestrator=orch)
 
 
 @app.on_event("shutdown")
@@ -917,10 +924,20 @@ async def _shutdown():
 
 # --- WhatsApp webhook support ---
 WA_VERIFY_TOKEN = (os.getenv("WHATSAPP_VERIFY_TOKEN") or "").strip()
-WA_ACCESS_TOKEN = (os.getenv("WHATSAPP_ACCESS_TOKEN") or "").strip()
-WA_PHONE_NUMBER_ID = (os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()
-WA_API_VERSION = (os.getenv("WHATSAPP_API_VERSION") or "v19.0").strip()
 WA_APP_SECRET = (os.getenv("WHATSAPP_APP_SECRET") or "").strip()
+
+def _wa_access_token() -> str:
+    return (os.getenv("WHATSAPP_ACCESS_TOKEN") or "").strip()
+
+def _wa_phone_number_id() -> str:
+    return (os.getenv("WHATSAPP_PHONE_NUMBER_ID") or "").strip()
+
+def _wa_api_version() -> str:
+    return (os.getenv("WHATSAPP_API_VERSION") or "v19.0").strip()
+
+WA_ACCESS_TOKEN = _wa_access_token()
+WA_PHONE_NUMBER_ID = _wa_phone_number_id()
+WA_API_VERSION = _wa_api_version()
 
 _WA_STATE_BY_USER: Dict[str, Dict[str, Any]] = {}
 _WA_STATE_MAX_USERS = 10_000  # evict oldest when exceeded
@@ -938,7 +955,6 @@ _WA_RATE_WINDOW_SEC = 60  # per 60 seconds
 _WA_MAX_TEXT_LEN = 2000   # discard messages longer than this
 
 
-_wa_upload_media = make_wa_upload_media(WA_ACCESS_TOKEN, WA_PHONE_NUMBER_ID, WA_API_VERSION)
 
 @app.get("/channels/whatsapp/webhook")
 async def whatsapp_verify(request: Request):
@@ -1027,10 +1043,10 @@ async def whatsapp_webhook(request: Request):
         _example = (_date_today.today() + __import__("datetime").timedelta(days=9)).isoformat()
         _hint_body = f"Please type your travel date in this format:\nYYYY-MM-DD\n\nExample: {_example}"
         _hint_payloads = [{"messaging_product": "whatsapp", "to": user_id, "type": "text", "text": {"body": _hint_body}}]
-        if not WA_ACCESS_TOKEN or not WA_PHONE_NUMBER_ID:
+        if not _wa_access_token() or not _wa_phone_number_id():
             return {"status": "ok", "outbound": "skipped_missing_config"}
-        _hint_url = f"https://graph.facebook.com/{WA_API_VERSION}/{WA_PHONE_NUMBER_ID}/messages"
-        _hint_headers = {"Authorization": f"Bearer {WA_ACCESS_TOKEN}", "Content-Type": "application/json"}
+        _hint_url = f"https://graph.facebook.com/{_wa_api_version()}/{_wa_phone_number_id()}/messages"
+        _hint_headers = {"Authorization": f"Bearer {_wa_access_token()}", "Content-Type": "application/json"}
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 r = await client.post(_hint_url, json=_hint_payloads[0], headers=_hint_headers)
@@ -1040,27 +1056,22 @@ async def whatsapp_webhook(request: Request):
             return {"status": "ok"}
 
     try:
-        resp = await _handle_chat_core({
-            "user_id": user_id,
-            "text": text,
-            "state": state,
-            "locale": "en_US",
-            "time_zone": "Asia/Bangkok",
-            "currency": "THB",
-        }, request)
-        guided = guide.render(resp)
-        _new_state = guided.state or {}
-        _WA_STATE_BY_USER[user_id] = _new_state
-        payloads = await build_whatsapp_payloads_from_guided(
-            guided,
-            user_id,
-            text_from_guided=lambda g: _whatsapp_text_from_guided(g, _extract_available_seats, _recommended_seats),
-            extract_available_seats=_extract_available_seats,
-            recommended_seats=_recommended_seats,
-            seatmap_image_file=_seatmap_image_file,
-            upload_media=_wa_upload_media,
-            image_payload_factory=_wa_image_payload,
+        from app.channels.pipeline import run_pipeline
+        from app.channels.render import render_whatsapp
+
+        envelope = await run_pipeline(
+            user_id        = user_id,
+            text           = text,
+            incoming_state = state,
+            locale         = "en_US",
+            time_zone      = "Asia/Bangkok",
+            currency       = "THB",
         )
+        _new_state = envelope.state or {}
+        _WA_STATE_BY_USER[user_id] = _new_state
+        # render_whatsapp returns a ready-to-send Cloud API payload dict
+        payloads = [render_whatsapp(envelope, user_id)]
+
         # Append CTA e-ticket button when payment is first confirmed
         _prev_step = state.get("step", "")
         _new_reservation_id = _new_state.get("reservation_id", "")
@@ -1086,13 +1097,13 @@ async def whatsapp_webhook(request: Request):
         print(f"WhatsApp handler error: {type(exc).__name__}: {exc}")
         payloads = [{"messaging_product": "whatsapp", "to": user_id, "type": "text", "text": {"body": "Sorry, something went wrong. Please try again or type 'reset'."}}]
 
-    if not WA_ACCESS_TOKEN or not WA_PHONE_NUMBER_ID:
+    if not _wa_access_token() or not _wa_phone_number_id():
         print("WhatsApp outbound skipped: missing token or phone number id")
         return {"status": "ok", "outbound": "skipped_missing_config", "payload_preview": payloads[:1]}
 
-    url = f"https://graph.facebook.com/{WA_API_VERSION}/{WA_PHONE_NUMBER_ID}/messages"
+    url = f"https://graph.facebook.com/{_wa_api_version()}/{_wa_phone_number_id()}/messages"
     headers = {
-        "Authorization": f"Bearer {WA_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {_wa_access_token()}",
         "Content-Type": "application/json",
     }
     statuses = []
@@ -1108,3 +1119,241 @@ async def whatsapp_webhook(request: Request):
     except Exception as exc:
         print(f"WhatsApp outbound exception: {exc}")
         return {"status": "ok", "meta_status": "exception", "detail": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# LINE Messaging API webhook
+# ---------------------------------------------------------------------------
+
+_LINE_CHANNEL_SECRET      = (os.getenv("LINE_CHANNEL_SECRET") or "").strip()
+_LINE_STATE_BY_USER:  Dict[str, Dict[str, Any]] = {}
+_LINE_RATE_COUNTS:    Dict[str, list] = {}
+_LINE_LAST_PROCESSED: Dict[str, float] = {}
+_LINE_STATE_MAX_USERS = 10_000
+_LINE_RATE_LIMIT      = 30
+_LINE_RATE_WINDOW_SEC = 60
+_LINE_DEDUP_WINDOW    = 5.0
+
+
+def _line_access_token() -> str:
+    return (os.getenv("LINE_CHANNEL_ACCESS_TOKEN") or "").strip()
+
+
+def _line_verify(body: bytes, signature: str) -> bool:
+    """Verify x-line-signature using HMAC-SHA256 of body with channel secret."""
+    if not _LINE_CHANNEL_SECRET:
+        return True  # skip verification when secret not configured
+    mac = hmac.new(_LINE_CHANNEL_SECRET.encode(), body, hashlib.sha256).digest()
+    return hmac.compare_digest(_base64.b64encode(mac).decode(), signature)
+
+
+@app.post("/channels/line/webhook")
+async def line_webhook(request: Request):
+    raw_body = await request.body()
+
+    # 1. Signature verification
+    sig = request.headers.get("x-line-signature", "")
+    if not _line_verify(raw_body, sig):
+        raise HTTPException(status_code=403, detail="Invalid LINE signature")
+
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        return {"status": "ok"}
+
+    from app.channels.render import parse_line_inbound, render_line
+
+    for event in body.get("events") or []:
+        parsed = parse_line_inbound({"events": [event]})
+        if not parsed:
+            continue
+
+        user_id     = parsed["user_id"]
+        text        = parsed["text"]
+        reply_token = parsed["reply_token"]
+
+        # 2. Rate limiting
+        _now = _time.monotonic()
+        _buckets = _LINE_RATE_COUNTS.setdefault(user_id, [])
+        _LINE_RATE_COUNTS[user_id] = [t for t in _buckets if _now - t < _LINE_RATE_WINDOW_SEC]
+        if len(_LINE_RATE_COUNTS[user_id]) >= _LINE_RATE_LIMIT:
+            continue
+        _LINE_RATE_COUNTS[user_id].append(_now)
+
+        # 3. Dedup
+        _dedup_key = f"{user_id}:{text.strip().lower()}"
+        _last_t = _LINE_LAST_PROCESSED.get(_dedup_key)
+        if _last_t is not None and (_now - _last_t) < _LINE_DEDUP_WINDOW:
+            continue
+        _LINE_LAST_PROCESSED[_dedup_key] = _now
+
+        # 4. Cap session store size
+        if user_id not in _LINE_STATE_BY_USER and len(_LINE_STATE_BY_USER) >= _LINE_STATE_MAX_USERS:
+            del _LINE_STATE_BY_USER[next(iter(_LINE_STATE_BY_USER))]
+
+        state = dict(_LINE_STATE_BY_USER.get(user_id) or {})
+
+        try:
+            from app.channels.pipeline import run_pipeline
+
+            envelope = await run_pipeline(
+                user_id        = f"line_{user_id}",
+                text           = text,
+                incoming_state = state,
+                locale         = "en_US",
+                time_zone      = "Asia/Bangkok",
+                currency       = "THB",
+            )
+            _LINE_STATE_BY_USER[user_id] = envelope.state or {}
+            payload = render_line(envelope, reply_token)
+
+        except Exception as exc:
+            print(f"LINE handler error: {type(exc).__name__}: {exc}")
+            payload = {
+                "replyToken": reply_token,
+                "messages": [{"type": "text", "text": "Sorry, something went wrong. Type 'reset' to start over."}],
+            }
+
+        token = _line_access_token()
+        if not token:
+            print("LINE outbound skipped: missing LINE_CHANNEL_ACCESS_TOKEN")
+            continue
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(
+                    "https://api.line.me/v2/bot/message/reply",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                )
+                print(f"LINE outbound status={r.status_code}")
+                if r.status_code >= 400:
+                    print(f"LINE outbound body={r.text}")
+        except Exception as exc:
+            print(f"LINE outbound exception: {exc}")
+
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Facebook Messenger webhook
+# ---------------------------------------------------------------------------
+
+_MESSENGER_VERIFY_TOKEN   = (os.getenv("MESSENGER_VERIFY_TOKEN") or "").strip()
+_MESSENGER_APP_SECRET     = (os.getenv("MESSENGER_APP_SECRET") or "").strip()
+_MESSENGER_STATE_BY_USER: Dict[str, Dict[str, Any]] = {}
+_MESSENGER_RATE_COUNTS:   Dict[str, list] = {}
+_MESSENGER_LAST_PROCESSED:Dict[str, float] = {}
+_MESSENGER_STATE_MAX_USERS = 10_000
+_MESSENGER_RATE_LIMIT      = 30
+_MESSENGER_RATE_WINDOW_SEC = 60
+_MESSENGER_DEDUP_WINDOW    = 5.0
+
+
+def _messenger_page_token() -> str:
+    return (os.getenv("MESSENGER_PAGE_ACCESS_TOKEN") or "").strip()
+
+
+@app.get("/channels/messenger/webhook")
+async def messenger_verify(request: Request):
+    params = request.query_params
+    if (
+        params.get("hub.mode") == "subscribe"
+        and _MESSENGER_VERIFY_TOKEN
+        and params.get("hub.verify_token") == _MESSENGER_VERIFY_TOKEN
+    ):
+        return PlainTextResponse(params.get("hub.challenge", ""))
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/channels/messenger/webhook")
+async def messenger_webhook(request: Request):
+    raw_body = await request.body()
+
+    # 1. Signature verification
+    if _MESSENGER_APP_SECRET:
+        sig_header = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(
+            _MESSENGER_APP_SECRET.encode(), raw_body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    try:
+        body = json.loads(raw_body)
+    except Exception:
+        return {"status": "ok"}
+
+    from app.channels.render import parse_messenger_inbound, render_messenger
+
+    for entry in body.get("entry") or []:
+        for messaging in entry.get("messaging") or []:
+            parsed = parse_messenger_inbound({"entry": [{"messaging": [messaging]}]})
+            if not parsed:
+                continue
+
+            user_id      = parsed["user_id"]
+            text         = parsed["text"]
+            recipient_id = user_id
+
+            # 2. Rate limiting
+            _now = _time.monotonic()
+            _buckets = _MESSENGER_RATE_COUNTS.setdefault(user_id, [])
+            _MESSENGER_RATE_COUNTS[user_id] = [t for t in _buckets if _now - t < _MESSENGER_RATE_WINDOW_SEC]
+            if len(_MESSENGER_RATE_COUNTS[user_id]) >= _MESSENGER_RATE_LIMIT:
+                continue
+            _MESSENGER_RATE_COUNTS[user_id].append(_now)
+
+            # 3. Dedup
+            _dedup_key = f"{user_id}:{text.strip().lower()}"
+            _last_t = _MESSENGER_LAST_PROCESSED.get(_dedup_key)
+            if _last_t is not None and (_now - _last_t) < _MESSENGER_DEDUP_WINDOW:
+                continue
+            _MESSENGER_LAST_PROCESSED[_dedup_key] = _now
+
+            # 4. Cap session store
+            if user_id not in _MESSENGER_STATE_BY_USER and len(_MESSENGER_STATE_BY_USER) >= _MESSENGER_STATE_MAX_USERS:
+                del _MESSENGER_STATE_BY_USER[next(iter(_MESSENGER_STATE_BY_USER))]
+
+            state = dict(_MESSENGER_STATE_BY_USER.get(user_id) or {})
+
+            try:
+                from app.channels.pipeline import run_pipeline
+
+                envelope = await run_pipeline(
+                    user_id        = f"msng_{user_id}",
+                    text           = text,
+                    incoming_state = state,
+                    locale         = "en_US",
+                    time_zone      = "Asia/Bangkok",
+                    currency       = "THB",
+                )
+                _MESSENGER_STATE_BY_USER[user_id] = envelope.state or {}
+                payload = render_messenger(envelope, recipient_id)
+
+            except Exception as exc:
+                print(f"Messenger handler error: {type(exc).__name__}: {exc}")
+                payload = {
+                    "recipient": {"id": recipient_id},
+                    "message": {"text": "Sorry, something went wrong. Type 'reset' to start over."},
+                }
+
+            token = _messenger_page_token()
+            if not token:
+                print("Messenger outbound skipped: missing MESSENGER_PAGE_ACCESS_TOKEN")
+                continue
+
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    r = await client.post(
+                        "https://graph.facebook.com/v19.0/me/messages",
+                        json=payload,
+                        params={"access_token": token},
+                    )
+                    print(f"Messenger outbound status={r.status_code}")
+                    if r.status_code >= 400:
+                        print(f"Messenger outbound body={r.text}")
+            except Exception as exc:
+                print(f"Messenger outbound exception: {exc}")
+
+    return {"status": "ok"}

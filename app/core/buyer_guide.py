@@ -70,13 +70,16 @@ class BuyerGuide:
                     if isinstance(opt, dict):
                         label = str(opt.get("label") or "").strip()
                         desc = str(opt.get("description") or "").strip()
+                        # Preserve explicit string ID (e.g. "pay", "cancel", "change")
+                        opt_id = opt.get("id") or i
                     else:
                         label = str(getattr(opt, "label", "") or "").strip()
                         desc = str(getattr(opt, "description", "") or "").strip()
+                        opt_id = i
 
                     if not label:
                         label = f"{i}."
-                    menu.append({"i": i, "label": label, "description": desc})
+                    menu.append({"i": opt_id, "label": label, "description": desc})
 
                 if menu:
                     expect = {"type": "choice", "min": 1, "max": len(menu), "reply": "number"}

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from time import perf_counter
 
 from app.core.contracts import Action, ChatResponse
+from app.formatters.reservation_card import format_reservation_card, _fmt_amount, _fmt_expiry
 from app.utils.dates import local_today_date
 from app.utils.env import (
     env_str as _env_str,
@@ -66,6 +67,15 @@ _CMD_SYNONYMS: Dict[str, str] = {
     "checkout": "pay",
     "ชำระ": "pay",
     "จ่าย": "pay",
+    # cancel
+    "cancel": "cancel",
+    "cancel booking": "cancel",
+    "ยกเลิก": "cancel",
+    # change
+    "change": "change",
+    "change trip": "change",
+    "rebook": "change",
+    "เปลี่ยน": "change",
     # status/details
     "status": "status",
     "check": "status",
@@ -130,9 +140,11 @@ _SUPPORTED_COMMANDS = {
     "confirm",
     "reserve",
     "pay",
+    "cancel",
+    "change",
 }
 
-_PROMPT_DATE = "What travel date? (YYYY-MM-DD, or say 'today' / 'tomorrow')"
+_PROMPT_DATE = "When would you like to travel?"
 _PROMPT_PAX = "How many tickets? (e.g. 2 or '2 pax')"
 _PROMPT_TO = "Where are you going TO? (type a city/terminal name)"
 _PROMPT_FROM = "Where are you departing FROM? (type a city/terminal name)"
@@ -140,41 +152,42 @@ _PROMPT_FROM = "Where are you departing FROM? (type a city/terminal name)"
 # ---------------------------------------------------------------------------
 # Friendly place labels for WhatsApp list items (title ≤24, desc ≤72).
 # Keys are lowercase substrings to match against keyword_name.
-# Values are (short_english_title, thai_name).
+# Values are (short_english_title, thai_name, brief_tagline).
 # More-specific keys must appear before generic ones (e.g. "sai tai mai" before "bangkok").
 # ---------------------------------------------------------------------------
-_PLACE_DISPLAY: Dict[str, Tuple[str, str]] = {
-    "sai tai mai":          ("Southern Terminal",  "ขนส่งสายใต้ใหม่"),
-    "southern":             ("Southern Terminal",  "ขนส่งสายใต้ใหม่"),
-    "ekkamai":              ("Eastern Terminal",   "สถานีเอกมัย"),
-    "mo chit 2":            ("Northern Terminal",  "หมอชิต 2"),
-    "chatuchak":            ("Northern Terminal",  "หมอชิต 2"),
-    "mo chit":              ("Northern Terminal",  "หมอชิต"),
-    "bangkok":              ("Bangkok",            "กรุงเทพฯ"),
-    "phuket":               ("Phuket",             "ภูเก็ต"),
-    "chiang mai":           ("Chiang Mai",         "เชียงใหม่"),
-    "chiang rai":           ("Chiang Rai",         "เชียงราย"),
-    "surat thani":          ("Surat Thani",        "สุราษฎร์ธานี"),
-    "hua hin":              ("Hua Hin",            "หัวหิน"),
-    "pattaya":              ("Pattaya",            "พัทยา"),
-    "krabi":                ("Krabi",              "กระบี่"),
-    "koh samui":            ("Koh Samui",          "เกาะสมุย"),
-    "koh phangan":          ("Koh Phangan",        "เกาะพะงัน"),
-    "koh tao":              ("Koh Tao",            "เกาะเต่า"),
-    "kanchanaburi":         ("Kanchanaburi",       "กาญจนบุรี"),
-    "ayutthaya":            ("Ayutthaya",          "อยุธยา"),
-    "nakhon ratchasima":    ("Korat",              "โคราช"),
-    "korat":                ("Korat",              "โคราช"),
-    "udon thani":           ("Udon Thani",         "อุดรธานี"),
-    "khon kaen":            ("Khon Kaen",          "ขอนแก่น"),
-    "nakhon si thammarat":  ("Nakhon Si Th.",      "นครศรีธรรมราช"),
-    "hat yai":              ("Hat Yai",            "หาดใหญ่"),
-    "ranong":               ("Ranong",             "ระนอง"),
-    "phang nga":            ("Phang Nga",          "พังงา"),
-    "trang":                ("Trang",              "ตรัง"),
-    "satun":                ("Satun",              "สตูล"),
-    "chumphon":             ("Chumphon",           "ชุมพร"),
-    "rayong":               ("Rayong",             "ระยอง"),
+_PLACE_DISPLAY: Dict[str, Tuple[str, str, str]] = {
+    "sai tai mai":          ("Southern Terminal",  "ขนส่งสายใต้ใหม่",  "South Bangkok bus terminal"),
+    "southern":             ("Southern Terminal",  "ขนส่งสายใต้ใหม่",  "South Bangkok bus terminal"),
+    "ekkamai":              ("Eastern Terminal",   "สถานีเอกมัย",       "East Bangkok bus terminal"),
+    "mo chit 2":            ("Northern Terminal",  "หมอชิต 2",          "North Bangkok bus terminal"),
+    "chatuchak":            ("Northern Terminal",  "หมอชิต 2",          "North Bangkok bus terminal"),
+    "mo chit":              ("Northern Terminal",  "หมอชิต",            "North Bangkok bus terminal"),
+    "rangsit":              ("Rangsit Terminal",   "รังสิต",            "North Bangkok, near airport"),
+    "bangkok":              ("Bangkok",            "กรุงเทพฯ",          "Capital city, Grand Palace & temples"),
+    "phuket":               ("Phuket",             "ภูเก็ต",            "Tropical island, beach resorts"),
+    "chiang mai":           ("Chiang Mai",         "เชียงใหม่",         "Northern city, temples & mountains"),
+    "chiang rai":           ("Chiang Rai",         "เชียงราย",          "Golden Triangle, White Temple"),
+    "surat thani":          ("Surat Thani",        "สุราษฎร์ธานี",      "Gateway to Koh Samui & Phangan"),
+    "hua hin":              ("Hua Hin",            "หัวหิน",            "Royal seaside resort town"),
+    "pattaya":              ("Pattaya",            "พัทยา",             "Coastal resort city, nightlife"),
+    "krabi":                ("Krabi",              "กระบี่",            "Limestone cliffs, island hopping"),
+    "koh samui":            ("Koh Samui",          "เกาะสมุย",          "Palm-lined island paradise"),
+    "koh phangan":          ("Koh Phangan",        "เกาะพะงัน",         "Full Moon Party island"),
+    "koh tao":              ("Koh Tao",            "เกาะเต่า",          "Top diving & snorkelling island"),
+    "kanchanaburi":         ("Kanchanaburi",       "กาญจนบุรี",         "WWII history, waterfalls & rivers"),
+    "ayutthaya":            ("Ayutthaya",          "อยุธยา",            "Ancient ruins, UNESCO World Heritage"),
+    "nakhon ratchasima":    ("Korat",              "โคราช",             "Northeast gateway, Khmer temples"),
+    "korat":                ("Korat",              "โคราช",             "Northeast gateway, Khmer temples"),
+    "udon thani":           ("Udon Thani",         "อุดรธานี",          "Northeast hub, Bronze Age history"),
+    "khon kaen":            ("Khon Kaen",          "ขอนแก่น",           "Northeast university & silk city"),
+    "nakhon si thammarat":  ("Nakhon Si Th.",      "นครศรีธรรมราช",     "Southern temples & shadow puppets"),
+    "hat yai":              ("Hat Yai",            "หาดใหญ่",           "Southern shopping city near Malaysia"),
+    "ranong":               ("Ranong",             "ระนอง",             "Hot springs, Myanmar border crossing"),
+    "phang nga":            ("Phang Nga",          "พังงา",             "James Bond Bay, sea caves & karsts"),
+    "trang":                ("Trang",              "ตรัง",              "Beaches, caves & dim sum culture"),
+    "satun":                ("Satun",              "สตูล",              "Pristine islands, marine park"),
+    "chumphon":             ("Chumphon",           "ชุมพร",             "Ferry point to Koh Tao & Koh Samui"),
+    "rayong":               ("Rayong",             "ระยอง",             "Eastern seaboard, fruit & beaches"),
 }
 
 
@@ -182,17 +195,15 @@ def _friendly_place_label(name: str, province: str) -> Tuple[str, str]:
     """Return (title ≤24, description ≤72) for a WhatsApp list row.
 
     Title  = short recognisable English name (fits the 24-char WA title limit).
-    Desc   = Thai name · full English name (for context inside the 72-char limit).
+    Desc   = Thai name · brief tagline (fits the 72-char WA description limit).
     """
     name_l = name.lower()
-    for key, (short_en, thai) in _PLACE_DISPLAY.items():
+    for key, (short_en, thai, tagline) in _PLACE_DISPLAY.items():
         if key in name_l:
             title = short_en[:24]
-            # Full English name in description if it differs from the short title.
-            extra = f" · {name}" if name.lower() != short_en.lower() and len(name) <= 50 else ""
-            desc = f"{thai}{extra}"
+            desc = f"{thai} · {tagline}"
             return title, desc[:72]
-    # Fallback: raw name as title, province as Thai hint (no lookup available).
+    # Fallback: raw name as title, province as hint (no lookup available).
     title = name[:24]
     desc = province[:72] if province and province.lower() not in name.lower() else ""
     return title, desc
@@ -627,7 +638,7 @@ def extract_trips(resp: Any) -> List[Dict[str, Any]]:
 def _summarize_probe_response(resp: Any) -> Dict[str, Any]:
     """Small, safe summary for DIAG logs when route probing looks empty.
 
-    We intentionally log shapes, types, and key names only — not full payloads.
+    We intentionally log shapes, types, and key names only  -  not full payloads.
     """
     out: Dict[str, Any] = {"type": type(resp).__name__}
     if isinstance(resp, dict):
@@ -669,8 +680,8 @@ def format_trip_option(trip: Dict[str, Any], idx: int, pax: int, currency: str) 
     except Exception:
         day_tag = ""
 
-    # Title ≤ 24 chars: departure → arrival time + day tag
-    title_raw = f"{dep} → {arr}{day_tag}" if dep and arr else (dep or arr or "?")
+    # Title ≤ 24 chars: departure → arrival time only (no day tag — kept for description)
+    title_raw = f"{dep} → {arr}" if dep and arr else (dep or arr or "?")
     title = title_raw[:24]
 
     # Fare data
@@ -688,28 +699,30 @@ def format_trip_option(trip: Dict[str, Any], idx: int, pax: int, currency: str) 
     cabin = str(_safe_get(trip, ["cabin_class", "cabin_class_name"], "") or "")
     seats = _safe_get(trip, ["inventory", "seat_available"], "")
 
-    # Price string — show per-person and total when >1 pax
+    # Price string — compact, shows total when >1 pax
     if unit is not None:
-        price_part = f"{int(unit) if unit == int(unit) else unit:.0f} {currency}/person"
+        price_str = f"฿{int(unit) if unit == int(unit) else unit:.0f}"
         if pax > 1:
-            price_part += f" (total {int(unit * pax)} {currency})"
+            price_str += f" (฿{int(unit * pax)} total)"
     else:
-        price_part = "Price TBC"
+        price_str = ""
 
     # Seats urgency hint
     try:
         seat_n = int(seats)
-        seat_part = f" · {seat_n} seats left" if seat_n <= 5 else f" · {seat_n} seats"
+        seat_part = f" · {seat_n} left" if seat_n <= 5 else ""
     except Exception:
         seat_part = ""
 
-    # Cabin label — skip generic / unhelpful values
+    # Cabin label — skip generic values
     cabin_clean = cabin.strip()
     cabin_part = f" {cabin_clean} ·" if cabin_clean and cabin_clean.lower() not in {"bus", "standard", ""} else ""
 
-    # Description ≤ 72 chars: Carrier · Cabin · Price · Seats
-    carrier_short = carrier[:22]
-    desc_raw = f"{carrier_short} ·{cabin_part} {price_part}{seat_part}"
+    # Description ≤ 72 chars: Carrier · Cabin · Price · Day tag · Seats
+    carrier_short = carrier[:20]
+    day_str = f" · {day_tag.strip()}" if day_tag else ""
+    price_part = f" · {price_str}" if price_str else ""
+    desc_raw = f"{carrier_short}{cabin_part}{price_part}{day_str}{seat_part}"
     desc = desc_raw[:72]
 
     return {"id": str(idx), "label": title, "description": desc, "fare_ref_id": fare_ref_id}
@@ -985,6 +998,14 @@ class SessionState:
     locale: Optional[str] = None
     currency: Optional[str] = None
 
+    # Pipeline-injected conversation language (e.g. "th", "zh").
+    # Used by format_reservation_card for locale-aware route display.
+    chat_language: Optional[str] = None
+
+    # Set to True after the welcome message has been shown so it is never
+    # repeated mid-session (only reset clears this back to False).
+    welcomed: bool = False
+
 
 # =============================================================================
 # Orchestrator
@@ -1008,6 +1029,7 @@ class Orchestrator:
         self.default_locale = _env_str("DEFAULT_LOCALE", "en_US")
         self.default_currency = _env_str("DEFAULT_CURRENCY", "THB")
         self.default_from_keyword_id = _env_int_required("DEFAULT_FROM_KEYWORD_ID")
+        self.default_from_keyword_name = _env_str("DEFAULT_FROM_KEYWORD_NAME", "Bangkok")
         self.default_to_keyword_id = _env_int_required("DEFAULT_TO_KEYWORD_ID")
 
         self.auto_reserve_after_seats = _env_bool("AUTO_RESERVE_AFTER_SEATS", True)
@@ -1078,7 +1100,12 @@ class Orchestrator:
 
     def _get(self, user_id: str) -> SessionState:
         if user_id not in self.sessions:
-            self.sessions[user_id] = SessionState()
+            s = SessionState()
+            # Pre-apply the default departure city so the destinations list can
+            # be shown immediately once the user has picked a travel date.
+            if self.default_from_keyword_id:
+                s.from_keyword_id = self.default_from_keyword_id
+            self.sessions[user_id] = s
         return self.sessions[user_id]
 
     def _locale(self, s: SessionState) -> str:
@@ -1090,8 +1117,45 @@ class Orchestrator:
     def _say(self, s: SessionState, text: str) -> ChatResponse:
         return ChatResponse(actions=[Action(type="say", payload={"text": text})], state=s.__dict__)
 
+    def _say_with_booking_buttons(self, s: SessionState, text: str) -> ChatResponse:
+        """Send text with Pay / Cancel / Change reply buttons."""
+        return ChatResponse(
+            actions=[
+                Action(type="say", payload={"text": text}),
+                Action(type="choose_one", payload={
+                    "title": "What would you like to do?",
+                    "options": [
+                        {"id": "pay",    "label": "💳 Pay now"},
+                        {"id": "cancel", "label": "❌ Cancel"},
+                        {"id": "change", "label": "🔄 Change trip"},
+                    ],
+                }),
+            ],
+            state=s.__dict__,
+        )
+
     def _ask(self, s: SessionState, field: str, prompt: str) -> ChatResponse:
         return ChatResponse(actions=[Action(type="ask", payload={"field": field, "prompt": prompt})], state=s.__dict__)
+
+    def _welcome_response(self, s: SessionState) -> ChatResponse:
+        """Welcome message shown on first contact and after every reset.
+
+        Leads with a short multi-script greeting to immediately signal that the
+        bot understands many languages, then opens the date picker so the user's
+        first interaction is a tap — not typing.
+        """
+        s.welcomed = True
+        greeting = (
+            "Welcome  ·  ยินดีต้อนรับ  ·  欢迎  ·  환영합니다  ·  Bienvenido\n\n"
+            "Book bus tickets across Thailand 🇹🇭\n"
+            "Chat naturally — I understand English, Thai, Chinese, Korean, "
+            "Japanese, Indonesian, Malay, French, Spanish, Russian and more.\n\n"
+            "When would you like to travel?"
+        )
+        return ChatResponse(
+            actions=[Action(type="ask", payload={"field": "departure_date", "prompt": greeting})],
+            state=s.__dict__,
+        )
 
     async def _await_busx(self, coro, *, timeout: Optional[float] = None) -> Any:
         t = float(timeout if timeout is not None else (self.busx_call_timeout_sec or 0))
@@ -1211,28 +1275,56 @@ class Orchestrator:
     def _cache_set(self, cache: dict, key: Any, val: Any) -> None:
         cache[key] = (self._now(), val)
 
-    def _probe_dates(self, s: SessionState) -> List[str]:
-        if s.departure_date:
-            return [s.departure_date]
+    def _probe_dates(self, s: SessionState, *, extra_days: int = 0) -> List[str]:
         base = local_today_date()
+        if s.departure_date:
+            dates = [s.departure_date]
+            # Optionally extend with nearby dates so route-existence probes are not
+            # fooled by a single date with no availability.
+            if extra_days > 0:
+                seen = {s.departure_date}
+                dep = base
+                try:
+                    from datetime import date as _dc
+                    dep = _dc.fromisoformat(s.departure_date)
+                except Exception:
+                    pass
+                for delta in range(1, extra_days + 1):
+                    for d in [(dep + timedelta(days=delta)).isoformat(),
+                               (dep - timedelta(days=delta)).isoformat()]:
+                        if d not in seen:
+                            seen.add(d)
+                            dates.append(d)
+            return dates
         n = max(1, int(self.route_probe_days or 1))
         return [(base + timedelta(days=i)).isoformat() for i in range(n)]
 
-    async def _route_has_trips(self, s: SessionState, from_id: int, to_id: int) -> bool:
-        self._diag("route_has_trips:start", {"from_id": int(from_id), "to_id": int(to_id), "dates": self._probe_dates(s)})
+    async def _route_has_trips(self, s: SessionState, from_id: int, to_id: int, *, extra_probe_days: int = 0) -> bool:
+        dates = self._probe_dates(s, extra_days=extra_probe_days)
+        self._diag("route_has_trips:start", {"from_id": int(from_id), "to_id": int(to_id), "dates": dates})
         loc = self._locale(s)
         cur = self._currency(s)
 
         cache_key_base = (loc, cur, int(from_id), int(to_id))
         cache = self._cache_route
 
-        for d in self._probe_dates(s):
+        # When probing with extra dates we require at least one date to have REAL trips
+        # before accepting a success:True / empty-trips response.  This prevents the
+        # terminal picker from showing terminals whose routes don't actually exist
+        # (BusX returns success:True with empty data for both "no trips today" and
+        # "route doesn't exist").
+        found_real_trips = False
+        success_true_no_trips = False  # fallback signal from at least one date
+
+        for d in dates:
             key = (*cache_key_base, d)
             cached = self._cache_get(cache, key)
             if cached is not None:
                 self._diag("route_has_trips:cache", {"from_id": int(from_id), "to_id": int(to_id), "date": d, "ok": bool(cached)})
                 if cached:
-                    return True
+                    if extra_probe_days == 0:
+                        return True
+                    found_real_trips = True
                 continue
 
             try:
@@ -1249,19 +1341,19 @@ class Orchestrator:
                 )
                 trips = extract_trips(resp)
                 ok = bool(trips)
-                if not ok:
-                    # success:True but no departure data means the route IS valid — the API
-                    # recognises it but there are simply no trips on this particular date.
-                    # Only a 1007 "No data" error (raised as an exception below) means the
-                    # route truly does not exist.  Accept route-valid-no-trips as ok=True so
-                    # valid departure options are not hidden from the user.
-                    if isinstance(resp, dict) and resp.get("success") is True:
-                        ok = True
+                if ok:
+                    found_real_trips = True
+                elif isinstance(resp, dict) and resp.get("success") is True:
+                    # API returned success but no trips — could be "no availability on
+                    # this date" (route valid) or "route doesn't exist" (both look the
+                    # same).  Record this signal; only accept it if extra_probe_days==0
+                    # (single-date probe where we have no other evidence).
+                    success_true_no_trips = True
                 self._diag("route_has_trips:result", {"from_id": int(from_id), "to_id": int(to_id), "date": d, "ok": ok, "trip_count": len(trips or [])})
                 if not ok:
                     self._diag("route_has_trips:raw_summary", {"from_id": int(from_id), "to_id": int(to_id), "date": d, "summary": _summarize_probe_response(resp)})
                 self._cache_set(cache, key, ok)
-                if ok:
+                if ok and extra_probe_days == 0:
                     return True
             except Exception as e:
                 self._diag("route_has_trips:error", {"from_id": int(from_id), "to_id": int(to_id), "date": d, "error": _dbg_exc(e)})
@@ -1269,6 +1361,15 @@ class Orchestrator:
                     self._cache_set(cache, key, False)
                 continue
 
+        if extra_probe_days > 0:
+            # Multi-date probe: only trust real trips as evidence; ignore success_true_no_trips
+            # across all dates because we can't distinguish "no availability" from "no route".
+            return found_real_trips
+
+        # Single-date probe (original behaviour): accept success:True / no trips as
+        # "route valid but nothing available on this date".
+        if success_true_no_trips:
+            return True
         return False
 
     # -------------------------------------------------------------------------
@@ -1352,7 +1453,7 @@ class Orchestrator:
                 exact_name = 1 if name_norm == desired_norm and desired_norm else 0
                 exact_prov = 1 if prov_norm == desired_norm and desired_norm else 0
                 # Province-level IDs (e.g. keyword_id=19 "Surat Thani") are the most
-                # reliable for search_trips — prefer them first when name matches exactly.
+                # reliable for search_trips  -  prefer them first when name matches exactly.
                 # city next, stop last (too specific, may not work with every operator).
                 exact_kind_priority = {
                     "state_province": 0,
@@ -1468,11 +1569,18 @@ class Orchestrator:
         *,
         strict_destination_name: bool,
         global_pair_budget: Optional[int] = None,
+        terminal_picker: bool = False,
     ) -> Dict[int, List[Dict[str, Any]]]:
         if global_pair_budget is None:
             global_pair_budget = self.strict_probe_budget if strict_destination_name else max(
                 30, int(self.route_probe_limit or 10) * 3
             )
+
+        # Terminal picker needs real trips to confirm a route exists.  Probe with
+        # extra dates so a single-date "no availability" doesn't discard valid routes,
+        # and so that "success:True / no trips" across ALL dates is treated as
+        # "route doesn't exist" rather than "route valid, nothing available".
+        extra_days = 3 if terminal_picker else 0
 
         budget = max(1, int(global_pair_budget))
         to_map: Dict[int, List[Dict[str, Any]]] = {}
@@ -1483,7 +1591,7 @@ class Orchestrator:
         if s.to_keyword_id:
             known_to_id = int(s.to_keyword_id)
             known_to_row = {"keyword_id": known_to_id, "keyword_name": s.to_label or str(known_to_id)}
-            self._diag("sellable_from_filter:direct_probe", {"known_to_id": known_to_id, "candidates": len(from_candidates)})
+            self._diag("sellable_from_filter:direct_probe", {"known_to_id": known_to_id, "candidates": len(from_candidates), "terminal_picker": terminal_picker, "extra_days": extra_days})
             for fr in from_candidates:
                 if budget <= 0:
                     break
@@ -1492,19 +1600,27 @@ class Orchestrator:
                 except Exception:
                     continue
                 budget -= 1
-                if await self._route_has_trips(s, from_id, known_to_id):
+                if await self._route_has_trips(s, from_id, known_to_id, extra_probe_days=extra_days):
                     to_map[from_id] = [known_to_row]
             self._diag("sellable_from_filter:direct_probe_done", {"viable_from_ids": list(to_map.keys())})
             if to_map:
                 return to_map
-            # Direct probe found nothing — the resolved TO ID is not valid for any of these FROM
+            # Direct probe found nothing  -  the resolved TO ID is not valid for any of these FROM
             # points (e.g. wrong level/type of keyword).  Fall back to the per-FROM
             # list_keyword_to approach which finds the correct TO ID for each origin.
             self._diag("sellable_from_filter:direct_probe_fallback", {"resolved_to_id": known_to_id})
             budget = max(1, int(global_pair_budget))  # reset budget for fallback pass
             # Clear resolved TO so the fallback can discover the correct per-route TO ID.
+            # Save originals so we can restore them if the fallback also finds nothing —
+            # otherwise the caller loses destination context (e.g. to_keyword_id=None
+            # confuses the main routing loop on the next user turn).
+            _fallback_saved_to_id = known_to_id
+            _fallback_saved_to_label = s.to_label
             s.to_keyword_id = None
             s.to_label = None
+        else:
+            _fallback_saved_to_id = None
+            _fallback_saved_to_label = None
 
         for fr in from_candidates:
             if budget <= 0:
@@ -1525,6 +1641,13 @@ class Orchestrator:
             budget -= max(1, int(tried))
             if found:
                 to_map[from_id] = found
+
+        # If the fallback also found nothing, restore the original TO keyword so that
+        # downstream error messages can reference the destination and the next-turn
+        # routing doesn't incorrectly treat the destination as unknown.
+        if not to_map and _fallback_saved_to_id is not None:
+            s.to_keyword_id = _fallback_saved_to_id
+            s.to_label = _fallback_saved_to_label
 
         return to_map
 
@@ -1638,8 +1761,27 @@ class Orchestrator:
     # Keyword selection flows (sellable-only)
     # -------------------------------------------------------------------------
 
-    async def _ensure_from_selected(self, s: SessionState, user_text: str) -> ChatResponse:
+    async def _ensure_from_selected(self, s: SessionState, user_text: str, *, _terminal_picker: bool = False) -> ChatResponse:
         self._diag("ensure_from_selected:start", {"user_text": user_text, "state": self._diag_state(s)})
+
+        # ── City picker re-entry (step 1 of departure selection) ──────────────
+        # User picked a departure city from the interactive list.  Extract the
+        # city name, set desired_from_text, then fall into the terminal picker.
+        if s.awaiting_choice == "from_city" and s.pending_from_candidates:
+            opts = self._build_choice_options(s.pending_from_candidates)
+            idx = self._resolve_choice_index(user_text, opts)
+            if idx is None or not (1 <= idx <= len(s.pending_from_candidates)):
+                return self._invalid_choice_reply(s)
+            row = s.pending_from_candidates[idx - 1]
+            city_name = str(row.get("keyword_name") or row.get("state_province_name") or "").strip()
+            self._diag("ensure_from_selected:city_choice", {"user_text": user_text, "city": city_name})
+            s.desired_from_text = city_name
+            s.from_query = city_name
+            s.pending_from_candidates = []
+            s.awaiting_choice = None
+            return await self._ensure_from_selected(s, city_name, _terminal_picker=True)
+
+        # ── Terminal picker re-entry (step 2, or direct terminal selection) ───
         if s.awaiting_choice == "from" and s.pending_from_candidates:
             opts = self._build_choice_options(s.pending_from_candidates)
             idx = self._resolve_choice_index(user_text, opts)
@@ -1701,12 +1843,12 @@ class Orchestrator:
         try:
             rows = await self._list_keyword_from_cached(s)
         except Exception as e:
-            return self._say(s, "Sorry — I couldn't load departure locations right now.\n\n(debug) " + _dbg_exc(e))
+            return self._say(s, "Sorry  -  I couldn't load departure locations right now.\n\n(debug) " + _dbg_exc(e))
 
         matches = self._canonical_match_rows(rows, s.from_query or "", top_k=self.canon_top_k)
         self._diag("ensure_from_selected:canonical_matches", {"from_query": s.from_query or "", "match_ids": [int(r.get("keyword_id")) for r in matches[:10] if r.get("keyword_id") is not None], "match_labels": [str(r.get("keyword_name") or r.get("state_province_name") or "") for r in matches[:10]]})
         if not matches:
-            return self._ask(s, "from", "I couldn’t find that departure. Try a nearby city/terminal name.")
+            return self._ask(s, "from", "I couldn't find that departure. Try a nearby city/terminal name.")
 
         # Filter out non-transit locations (hospitals, universities, etc.) that pollute FROM matches.
         _NON_TRANSIT_TOKENS = {"university", "hospital", "school", "college", "supermarket", "mall", "hotel", "resort", "clinic", "temple", "museum"}
@@ -1718,7 +1860,27 @@ class Orchestrator:
             matches = transit_matches
         self._diag("ensure_from_selected:transit_filtered", {"count": len(matches), "match_ids": [int(r.get("keyword_id")) for r in matches if r.get("keyword_id") is not None]})
 
-        strict = bool(s.desired_to_text) and bool(self.strict_sellable_only)
+        # Terminal picker mode: keep only stop/station-type rows from the canonical
+        # matches.  The canonical match + transit filter already found the right
+        # intercity terminals (e.g. Sai Tai Mai 1223, Ekkamai 1230, Mo Chit 1216).
+        # We just strip city/province-level rows — no wholesale scan of all rows.
+        if _terminal_picker and self.default_from_keyword_id:
+            terminal_matches = [
+                r for r in matches
+                if str(r.get("keyword_type") or "").strip().lower() in {"stop", "station"}
+            ]
+            self._diag("ensure_from_selected:terminal_picker_filtered", {"before": len(matches), "after": len(terminal_matches), "ids": [int(r.get("keyword_id")) for r in terminal_matches if r.get("keyword_id") is not None], "names": [str(r.get("keyword_name") or "") for r in terminal_matches]})
+            if not terminal_matches:
+                # No terminal rows in canonical match — proceed directly
+                s.from_label = s.desired_from_text or self.default_from_keyword_name
+                self._diag("ensure_from_selected:terminal_picker_fallback", {"reason": "no stop/station in canonical matches"})
+                return await self._run_trip_search_or_recover(s)
+            matches = terminal_matches
+
+        # strict=True triggers the sellable filter.  Use desired_to_text OR to_label
+        # (the latter is set when user picked a destination from the list but
+        # desired_to_text was not populated yet).
+        strict = bool(s.desired_to_text or s.to_label) and bool(self.strict_sellable_only)
 
         # Pre-resolve destination keyword ID from the FROM keyword list (province/city level IDs
         # like to_id=19 for Surat Thani work in search_trips but may not appear in list_keyword_to
@@ -1747,6 +1909,7 @@ class Orchestrator:
                     matches,
                     strict_destination_name=True,
                     global_pair_budget=self.strict_probe_budget,
+                    terminal_picker=_terminal_picker,
                 )
             except Exception:
                 return self._say(
@@ -1767,17 +1930,25 @@ class Orchestrator:
                 if fid in s.pending_to_map_by_from_id and s.pending_to_map_by_from_id[fid]:
                     filtered.append(fr)
 
+            _dest_display = s.desired_to_text or s.to_label or "your destination"
             if not filtered:
+                # Clear the failed departure query so the next turn shows a fresh
+                # departure prompt rather than retrying the same failed city.
+                s.desired_from_text = None
+                s.from_query = None
                 return self._ask(
                     s,
                     "from",
-                    f"I couldn’t find any sellable departures to {s.desired_to_text} right now. "
-                    "Try a different departure phrase, change date, or type reset.",
+                    f"No direct route to {_dest_display} from that city. "
+                    "Try a different departure city, or type reset.",
                 )
             matches = filtered
 
         self._diag("ensure_from_selected:filtered_matches", {"match_ids": [int(r.get("keyword_id")) for r in matches if r.get("keyword_id") is not None], "match_labels": [str(r.get("keyword_name") or r.get("state_province_name") or "") for r in matches]})
-        if len(matches) == 1:
+
+        # In terminal picker mode always show the list — even a single result must be
+        # confirmed by the user so they know which terminal their trip departs from.
+        if len(matches) == 1 and not _terminal_picker:
             row = matches[0]
             from_id = int(row.get("keyword_id"))
             s.from_keyword_id = from_id
@@ -1788,14 +1959,14 @@ class Orchestrator:
                 s.pending_to_map_by_from_id = {}
                 return await self._advance_after_route_set(s)
 
-            if s.desired_to_text:
-                return self._ask(s, "from", f"That departure cannot sell to {s.desired_to_text}. Try another name.")
+            _dest_display = s.desired_to_text or s.to_label
+            if _dest_display:
+                return self._ask(s, "from", f"That departure cannot sell to {_dest_display}. Try another name.")
 
             return self._say(s, f"✅ Departure set to: {s.from_label}\nWhere are you going TO?")
 
-        intro = "Where would you like to depart from?"
-        if s.desired_to_text:
-            intro = f"Trips to {s.desired_to_text} are available from:"
+        _dest_display = s.desired_to_text or s.to_label
+        intro = f"Trips to {_dest_display} are available from:" if _dest_display else "Where would you like to depart from?"
         return await self._render_from_choices(s, matches, intro=intro)
 
     async def _ensure_to_selected(self, s: SessionState, user_text: str) -> ChatResponse:
@@ -1819,7 +1990,7 @@ class Orchestrator:
             return self._ask(
                 s,
                 "from",
-                f"Where are you departing FROM? (I’ll only show available departures for routes to {s.desired_to_text})",
+                f"Where are you departing FROM? (I'll only show available departures for routes to {s.desired_to_text})",
             )
 
         if s.awaiting_choice == "to" and s.pending_to_candidates:
@@ -1832,6 +2003,12 @@ class Orchestrator:
             self._diag("ensure_to_selected:choice", {"user_text": user_text, "resolved_index": idx, "to_id": int(row.get("keyword_id")), "to_label": str(row.get("keyword_name") or row.get("state_province_name") or "")})
             s.to_keyword_id = int(row.get("keyword_id"))
             s.to_label = str(row.get("keyword_name") or row.get("state_province_name") or s.to_keyword_id)
+            # Populate desired_to_text so the downstream strict sellable filter
+            # can run even when the user picked from a list (not typed the name).
+            if not s.desired_to_text:
+                _name = str(row.get("keyword_name") or "").strip()
+                _prov = str(row.get("state_province_name") or "").strip()
+                s.desired_to_text = _friendly_place_label(_name, _prov)[0] or s.to_label
 
             s.to_query = None
             s.pending_to_candidates = []
@@ -1850,7 +2027,7 @@ class Orchestrator:
                 return self._ask(s, "to", _PROMPT_TO)
 
         s.to_query = _basic_sanitize(user_text).strip() or None
-        if s.to_query:
+        if s.to_query and not s.desired_to_text:
             s.desired_to_text = s.to_query
 
         strict = bool(s.desired_to_text)
@@ -1863,21 +2040,25 @@ class Orchestrator:
                 strict_destination_name=strict,
             )
         except Exception as e:
-            return self._say(s, "Sorry — I couldn't load destinations right now.\n\n(debug) " + _dbg_exc(e))
+            return self._say(s, "Sorry  -  I couldn't load destinations right now.\n\n(debug) " + _dbg_exc(e))
 
         self._diag("ensure_to_selected:viable_matches", {"desired_to_text": s.desired_to_text, "from_keyword_id": s.from_keyword_id, "viable_ids": [int(r.get("keyword_id")) for r in viable if r.get("keyword_id") is not None], "viable_labels": [str(r.get("keyword_name") or r.get("state_province_name") or "") for r in viable]})
         if not viable and strict:
             return self._ask(
                 s,
                 "to",
-                f"I couldn’t find a sellable destination matching “{s.desired_to_text}”. "
+                f"I couldn't find a sellable destination matching '{s.desired_to_text}'. "
                 "Try a different destination phrase, or type reset.",
             )
 
         if not viable:
-            return self._ask(s, "to", "I couldn’t find sellable destinations. Try another destination or type reset.")
+            return self._ask(s, "to", "I couldn't find sellable destinations. Try another destination or type reset.")
 
-        if len(viable) == 1:
+        # If user explicitly named a destination (strict=True), auto-select the
+        # best-ranked viable match rather than showing a picker.  The viable list
+        # is already sorted by relevance, so viable[0] is always the best choice.
+        # When strict=False (user typed nothing / browsing), show the full list.
+        if strict and viable:
             row = viable[0]
             s.to_keyword_id = int(row.get("keyword_id"))
             s.to_label = str(row.get("keyword_name") or row.get("state_province_name") or s.to_keyword_id)
@@ -1919,7 +2100,7 @@ class Orchestrator:
         except Exception as e:
             route = f"{s.from_label or s.from_keyword_id} → {s.to_label or s.to_keyword_id}"
             msg = (
-                "Sorry — I couldn't complete trip search right now.\n"
+                "Sorry  -  I couldn't complete trip search right now.\n"
                 f"({route} on {s.departure_date})\n"
                 "Please try again, or type 'reset'."
             )
@@ -1984,13 +2165,63 @@ class Orchestrator:
     async def _advance_after_route_set(self, s: SessionState) -> ChatResponse:
         if s.step != "NEW":
             if s.step == "PICK_TRIP" and s.trips:
-                return self._say(s, "Please pick a trip number (1–10).")
+                return self._say(s, "Please pick a trip number (1-10).")
             return self._say(s, "Continue where you left off, or type 'show'.")
 
         if not s.departure_date:
             return self._ask(s, "departure_date", _PROMPT_DATE)
 
-        # Pax is NOT asked here — we search first so we only ask for ticket
+        # Departure not yet confirmed — user must choose city then terminal.
+        if not s.from_label and s.to_keyword_id:
+            dest = s.desired_to_text or s.to_label or "your destination"
+            if not s.desired_from_text:
+                # Show an interactive city picker.  Load city-level rows from the
+                # keyword list (state_province / city types) and present them as a
+                # WhatsApp list so the user taps their departure city.
+                try:
+                    rows = await self._list_keyword_from_cached(s)
+                except Exception as e:
+                    return self._say(s, "Sorry, couldn't load departure cities right now.\n\n" + _dbg_exc(e))
+
+                # Keep only city/province-level rows; de-dup by normalised name.
+                seen_names: set = set()
+                city_rows: List[Dict[str, Any]] = []
+                for r in rows:
+                    ktype = str(r.get("keyword_type") or "").strip().lower()
+                    if ktype not in {"state_province", "city"}:
+                        continue
+                    nname = _normalize_for_match(str(r.get("keyword_name") or r.get("state_province_name") or ""))
+                    if not nname or nname in seen_names:
+                        continue
+                    # Only include cities that have a _PLACE_DISPLAY entry so labels are clean.
+                    if not any(key in nname for key in _PLACE_DISPLAY):
+                        continue
+                    seen_names.add(nname)
+                    city_rows.append(r)
+                    if len(city_rows) >= 10:
+                        break
+
+                if not city_rows:
+                    # Fallback: plain text ask when no city rows found
+                    return self._ask(s, "from", f"Which city are you departing from?")
+
+                s.pending_from_candidates = city_rows
+                s.awaiting_choice = "from_city"
+                opts = self._build_choice_options(city_rows)
+                actions = _say_with_choices(
+                    intro=f"Which city are you departing from? Only terminals that can reach {dest} will be shown next.",
+                    title="Choose departure city",
+                    options=opts,
+                )
+                return ChatResponse(actions=actions, state=s.__dict__)
+
+            # City known — run terminal picker filtered by destination.
+            city = s.desired_from_text
+            if not s.from_query:
+                s.from_query = city
+            return await self._ensure_from_selected(s, city, _terminal_picker=True)
+
+        # Pax is NOT asked here  -  we search first so we only ask for ticket
         # count once we know trips actually exist on this date. Pax defaults to
         # 1 for trip display and is confirmed when the user picks a trip.
         return await self._run_trip_search_or_recover(s)
@@ -2063,7 +2294,7 @@ class Orchestrator:
                     )
                 )
             except Exception as e:
-                return False, f"Sorry — I couldn't hold seat {seat_number} right now.\n\n(debug) " + _dbg_exc(e)
+                return False, f"Sorry  -  I couldn't hold seat {seat_number} right now.\n\n(debug) " + _dbg_exc(e)
 
             results.append(r)
             try:
@@ -2175,7 +2406,7 @@ class Orchestrator:
         except Exception as e:
             code = _exception_busx_code(e)
             if code not in {"1037", "1001", "1007"} and "does not checkout" not in str(e).lower():
-                return False, "Sorry — I couldn't create the reservation right now.\n\n(debug) " + _dbg_exc(e)
+                return False, "Sorry  -  I couldn't create the reservation right now.\n\n(debug) " + _dbg_exc(e)
             last_err = f"{type(e).__name__}: {e}"
 
         if isinstance(s.busx_reservation_response, dict):
@@ -2196,7 +2427,7 @@ class Orchestrator:
                 if code == "1037" or "does not checkout" in str(e).lower():
                     last_err = f"{type(e).__name__}: {e}"
                     continue
-                return False, "Sorry — I couldn't create the reservation right now.\n\n(debug) " + _dbg_exc(e)
+                return False, "Sorry  -  I couldn't create the reservation right now.\n\n(debug) " + _dbg_exc(e)
 
         if not isinstance(s.busx_reservation_response, dict):
             snap = {
@@ -2231,27 +2462,27 @@ class Orchestrator:
 
         pay = _extract_payment_block(resp)
         _full_name = f"{s.passenger_name or ''} {s.passenger_last_name or ''}".strip()
-        lines = [
-            "✅ Reservation created.",
-            f"reservation_id: {s.reservation_id or '(unknown)'}",
-            f"order_ref_id:  {s.order_ref_id or '(unknown)'}",
-        ]
-        if s.departure_ref_id:
-            lines.append(f"departure_ref_id: {s.departure_ref_id}")
-        if pay.get("total_price") and pay.get("currency"):
-            lines.append(f"amount:      {pay['total_price']} {pay['currency']}")
-        if pay.get("expires_at"):
-            lines.append(f"expires_at:  {pay['expires_at']}")
-        if pay.get("paycode"):
-            lines.append(f"paycode:     {pay['paycode']}")
-        if _full_name:
-            lines.append(f"passenger_name: {_full_name}")
-        if s.passenger_email and s.passenger_email != "test@example.com":
-            lines.append(f"passenger_email: {s.passenger_email}")
-        if s.passenger_phone_number and s.passenger_phone_number not in {"0000000000", "000000000"}:
-            lines.append(f"passenger_phone: {s.passenger_phone_number}")
-        lines.append("Next: type **pay** (then use **status** to confirm when pay_status becomes Y).")
-        return True, "\n".join(lines)
+
+        card_data: Dict[str, Any] = {
+            "from_label":         s.from_label or "",
+            "to_label":           s.to_label or "",
+            "desired_from_text":  s.desired_from_text or "",
+            "desired_to_text":    s.desired_to_text or "",
+            # Prefer pipeline-detected language (e.g. "th") over the BCP-47
+            # session locale ("en_US") so _route_lines shows the right script first.
+            "locale":             s.chat_language or self._locale(s),
+            "departure_date":     s.departure_date or "",
+            "seats":              ", ".join(s.selected_seats) if getattr(s, "selected_seats", None) else "",
+            "total_price":        pay.get("total_price") or "",
+            "currency":           pay.get("currency") or "THB",
+            "expires_at":         pay.get("expires_at") or "",
+            "reservation_id":     s.reservation_id or "",
+            "order_ref_id":       s.order_ref_id or "",
+            "passenger_name":     _full_name,
+            "passenger_email":    (s.passenger_email or "") if (s.passenger_email or "") not in {"", "test@example.com"} else "",
+            "passenger_phone_number": (s.passenger_phone_number or "") if (s.passenger_phone_number or "") not in {"", "0000000000", "000000000"} else "",
+        }
+        return True, format_reservation_card(card_data)
 
     async def _refresh_reservation_details(self, s: SessionState) -> Optional[Any]:
         if not s.reservation_id:
@@ -2287,6 +2518,7 @@ class Orchestrator:
         state: Optional[dict] = None,
     ) -> ChatResponse:
         async with self._lock_for(user_id):
+            is_new_user = user_id not in self.sessions
             s = self._get(user_id)
 
             if locale:
@@ -2295,10 +2527,18 @@ class Orchestrator:
                 s.time_zone = time_zone
             if currency:
                 s.currency = currency
+            # Propagate pipeline-detected language so format_reservation_card
+            # can render the route in the user's locale (Thai-first for "th", etc.)
+            if isinstance(state, dict):
+                s.chat_language = state.get("chat_language") or None
 
             raw = text or ""
             t = _basic_sanitize(raw)
             cmd = _normalize_cmd(t)
+
+            # Show welcome on first-ever contact (any message from a new user).
+            if is_new_user or not s.welcomed:
+                return self._welcome_response(s)
 
             in_picker_context = bool(
                 (s.awaiting_choice in {"from", "to"} and (s.pending_from_candidates or s.pending_to_candidates))
@@ -2318,9 +2558,12 @@ class Orchestrator:
                         )
                 except Exception:
                     pass
-                self.sessions[user_id] = SessionState()
-                s = self.sessions[user_id]
-                return self._ask(s, "departure_date", "Reset ✅\n" + _PROMPT_DATE)
+                s = SessionState()
+                s.locale = "en_US"  # Explicit English so welcome buttons don't inherit prior language
+                if self.default_from_keyword_id:
+                    s.from_keyword_id = self.default_from_keyword_id
+                self.sessions[user_id] = s
+                return self._welcome_response(s)
 
             if cmd in {"help", "show", "status", "details", "payinfo"} or cmd.startswith(
                 ("locale ", "currency ", "tz ", "timezone ")
@@ -2343,7 +2586,7 @@ class Orchestrator:
             if s.step == "PICK_TRIP" and s.trips:
                 idx = parse_choice_index(t)
                 if idx is None or not (1 <= idx <= len(s.trips)):
-                    return self._say(s, f"Please pick a trip number 1–{len(s.trips)}.")
+                    return self._say(s, f"Please pick a trip number 1-{len(s.trips)}.")
 
                 trip = s.trips[idx - 1]
                 s.selected_index = idx
@@ -2365,7 +2608,7 @@ class Orchestrator:
                     except Exception:
                         pass
                 if not fare_ref_id:
-                    return self._say(s, "Sorry — that trip doesn't include a fare_ref_id. Please choose another trip.")
+                    return self._say(s, "Sorry  -  that trip doesn't include a fare_ref_id. Please choose another trip.")
 
                 s.selected_fare_ref_id = fare_ref_id
 
@@ -2376,7 +2619,7 @@ class Orchestrator:
                 except Exception as e:
                     return self._say(
                         s,
-                        "Sorry — I couldn't load seat layout right now. Please choose another trip.\n\n(debug) "
+                        "Sorry  -  I couldn't load seat layout right now. Please choose another trip.\n\n(debug) "
                         + _dbg_exc(e),
                     )
 
@@ -2443,13 +2686,13 @@ class Orchestrator:
                         s.step = "MARKED"
                         return self._say(s, f"{msg1}\n\nMarked OK, but reservation failed:\n{msg2}\n\nType 'reserve' to retry.")
 
-                    return self._say(s, f"Selected seats: {', '.join(seats)}.\n\n{msg1}\n\n{msg2}")
+                    return self._say_with_booking_buttons(s, msg2)
 
                 s.step = "READY"
                 return self._say(s, f"Selected seats: {', '.join(seats)}. Next: type 'reserve'.")
 
             # ---------------------------------------------------------------
-            # Conversational passenger details — one field at a time
+            # Conversational passenger details  -  one field at a time
             # ---------------------------------------------------------------
             def _norm_phone(raw: str, ctry: str) -> Tuple[Optional[str], Optional[str]]:
                 p = (raw or "").strip()
@@ -2461,9 +2704,9 @@ class Orchestrator:
                     if digits.startswith("66") and len(digits) in {11, 12}:
                         digits = "0" + digits[2:]
                     if len(digits) != 10:
-                        return None, "Thai numbers need 10 digits — e.g. 0812345678 or +66812345678."
+                        return None, "Thai numbers need 10 digits  -  e.g. 0812345678 or +66812345678."
                     if not digits.startswith("0"):
-                        return None, "Thai numbers should start with 0 — e.g. 0812345678."
+                        return None, "Thai numbers should start with 0  -  e.g. 0812345678."
                 else:
                     if len(digits) < 6:
                         return None, "That number looks too short. Please include your country code."
@@ -2488,7 +2731,7 @@ class Orchestrator:
                 parts = raw_name.split()
                 if len(parts) < 2:
                     return self._ask(s, "passenger_name",
-                        "Please enter your first and last name — e.g. John Smith")
+                        "Please enter your first and last name  -  e.g. John Smith")
                 s.passenger_name = parts[0].title()
                 s.passenger_last_name = " ".join(parts[1:]).title()
                 s.step = "DETAILS_EMAIL"
@@ -2500,13 +2743,13 @@ class Orchestrator:
                 email = t.strip().lower()
                 if not email or "@" not in email or "." not in email.split("@")[-1]:
                     return self._ask(s, "passenger_email",
-                        f"Please enter a valid email address, {s.passenger_name or 'there'} — e.g. name@gmail.com")
+                        f"Please enter a valid email address, {s.passenger_name or 'there'}  -  e.g. name@gmail.com")
                 s.passenger_email = email
                 s.contact_email = email
                 s.step = "DETAILS_PHONE"
                 return self._ask(s, "passenger_phone",
                     f"Almost done, {s.passenger_name}! What is your phone number?\n"
-                    "Please include your country code — e.g.\n"
+                    "Please include your country code  -  e.g.\n"
                     "+66 81 234 5678 (Thailand)\n"
                     "+1 555 123 4567 (USA)")
 
@@ -2515,7 +2758,7 @@ class Orchestrator:
                 norm, err = _norm_phone(t, country)
                 if err:
                     return self._ask(s, "passenger_phone",
-                        f"Sorry, {s.passenger_name or 'there'} — {err}\n"
+                        f"Sorry, {s.passenger_name or 'there'}  -  {err}\n"
                         "Example: +66812345678 (Thailand) or +15551234567 (USA)")
                 s.passenger_phone_number = norm
                 s.contact_phone_number = norm
@@ -2529,8 +2772,7 @@ class Orchestrator:
                     s.step = "MARKED"
                     return self._say(s, f"Thank you, {s.passenger_name}! Your seats are held.\n\nHowever, there was an issue creating the reservation:\n{msg2}\n\nType 'reserve' to try again.")
 
-                hold_msg = s.last_hold_message or "✅ Seats held."
-                return self._say(s, f"Thank you, {s.passenger_name}! 🎉\n\n{hold_msg}\n\n{msg2}")
+                return self._say_with_booking_buttons(s, msg2)
 
             # READY+ commands
             if s.step in {"READY", "MARKED", "RESERVED", "PAYMENT_PENDING", "PAID"}:
@@ -2550,7 +2792,7 @@ class Orchestrator:
                         s.step = "MARKED"
                         return self._say(s, f"Marked OK, but reservation failed:\n{msg2}\n\nType 'reserve' to retry.")
 
-                    return self._say(s, f"{msg1}\n\n{msg2}")
+                    return self._say_with_booking_buttons(s, msg2)
 
                 if s.step == "MARKED" and cmd == "reserve":
                     if _looks_like_default_details(s):
@@ -2560,7 +2802,7 @@ class Orchestrator:
                     ok2, msg2 = await self._do_create_reservation(s)
                     if not ok2:
                         return self._say(s, msg2)
-                    return self._say(s, msg2)
+                    return self._say_with_booking_buttons(s, msg2)
 
                 if s.step in {"RESERVED", "PAYMENT_PENDING"} and cmd == "pay":
                     if not s.order_ref_id:
@@ -2586,32 +2828,123 @@ class Orchestrator:
                                     break
 
                     pay = _extract_payment_block(s.busx_reservation_response)
-
-                    lines = [
-                        "Payment initiated. Use 'status' to confirm when pay_status becomes Y.",
-                        f"reservation_id: {s.reservation_id or ''}".rstrip(),
-                        f"order_ref_id:  {s.order_ref_id or ''}".rstrip(),
-                    ]
+                    _DIV = "─────────────────"
+                    lines = ["💳 *Payment Initiated*", "", _DIV]
                     if pay.get("total_price") and pay.get("currency"):
-                        lines.append(f"amount:      {pay['total_price']} {pay['currency']}")
-                    if pay.get("payment_status") is not None:
-                        lines.append(f"pay_status:  {pay['payment_status']}")
-                    if pay.get("expires_at"):
-                        lines.append(f"expires_at:  {pay['expires_at']}")
+                        lines.append(f"💰  {_fmt_amount(pay['total_price'], pay.get('currency','THB'))}")
+                    if s.reservation_id:
+                        lines.append(f"🔖  *{s.reservation_id}*")
+                    if s.order_ref_id:
+                        lines.append(f"    _{s.order_ref_id}_")
                     if pay.get("paycode"):
-                        lines.append(f"paycode:     {pay['paycode']}")
-
+                        lines.append(f"🔑  {pay['paycode']}")
+                    if pay.get("expires_at"):
+                        lines.append(f"⏰  Pay by:  {_fmt_expiry(pay['expires_at'])}")
+                    lines.append(_DIV)
                     if payment_url:
-                        lines.append("")
-                        lines.append("Open this URL to pay:")
-                        lines.append(payment_url)
+                        lines += ["", "🌐 *Complete payment here:*", payment_url]
+                    else:
+                        lines += ["", "⏳ Awaiting payment confirmation."]
+                    lines += ["", "Use *status* to check when payment is confirmed."]
 
                     return self._say(s, "\n".join(lines))
+
+                if s.step in {"RESERVED", "PAYMENT_PENDING"} and cmd == "cancel":
+                    if not s.reservation_id:
+                        return self._say(s, "No active booking to cancel.")
+                    s.step = "CANCEL_CONFIRM"
+                    return ChatResponse(
+                        actions=[
+                            Action(type="say", payload={"text": f"⚠️ Cancel booking *{s.reservation_id}*?\nThis cannot be undone."}),
+                            Action(type="choose_one", payload={
+                                "title": "Confirm cancellation",
+                                "options": [
+                                    {"id": "cancel_yes", "label": "✅ Yes, cancel"},
+                                    {"id": "cancel_no",  "label": "❌ Keep booking"},
+                                ],
+                            }),
+                        ],
+                        state=s.__dict__,
+                    )
+
+                if s.step == "CANCEL_CONFIRM":
+                    if cmd in {"cancel_yes", "yes", "confirm"}:
+                        if not s.reservation_id:
+                            self._reset_session(s)
+                            return self._say(s, "No active booking found.")
+                        try:
+                            await self._await_busx(
+                                self.busx.cancel_reservations(booking_id=s.reservation_id, locale=self._locale(s))
+                            )
+                        except Exception as e:
+                            s.step = "RESERVED"
+                            return self._say(s, "Cancel failed.\n\n(debug) " + _dbg_exc(e))
+                        booking_id = s.reservation_id
+                        self._reset_session(s)
+                        return self._say(s, f"✅ Booking {booking_id} has been cancelled.")
+                    else:
+                        s.step = "RESERVED"
+                        return self._say(s, "OK — your booking is still active.")
+
+                if s.step in {"RESERVED", "PAYMENT_PENDING"} and cmd == "change":
+                    if not s.reservation_id:
+                        return self._say(s, "No active booking to change.")
+                    # Extract global ticket numbers from reservation response
+                    tickets: List[str] = []
+                    resp_data = s.busx_reservation_response
+                    if isinstance(resp_data, dict):
+                        data = resp_data.get("data") or resp_data
+                        if isinstance(data, dict):
+                            for ticket in (data.get("tickets") or data.get("global_tickets") or []):
+                                if isinstance(ticket, dict):
+                                    gtn = ticket.get("global_ticket_number")
+                                    if gtn:
+                                        tickets.append(str(gtn))
+                    if not tickets:
+                        return self._say(s, "Cannot change: ticket numbers not found in booking. Contact support.")
+                    try:
+                        result = await self._await_busx(
+                            self.busx.request_rebookings(global_ticket_numbers=tickets, locale=self._locale(s))
+                        )
+                    except Exception as e:
+                        return self._say(s, "Change request failed.\n\n(debug) " + _dbg_exc(e))
+                    # Check if rebooking is allowed
+                    allow = False
+                    if isinstance(result, dict):
+                        for item in (result.get("data") or []):
+                            if isinstance(item, dict):
+                                std = item.get("set_travel_date") or {}
+                                if isinstance(std, dict) and (std.get("allow_rebooking") or "").upper() == "Y":
+                                    allow = True
+                                    break
+                    if not allow:
+                        return self._say(s, "Sorry — rebooking is not permitted for this ticket. Please contact support.")
+                    # Preserve route so user only needs to pick a new date
+                    saved_from_kw   = s.from_keyword_id
+                    saved_to_kw     = s.to_keyword_id
+                    saved_from_lbl  = s.from_label
+                    saved_to_lbl    = s.to_label
+                    saved_from_q    = s.from_query
+                    saved_to_q      = s.to_query
+                    saved_from_text = s.desired_from_text
+                    saved_to_text   = s.desired_to_text
+                    self._reset_session(s)
+                    s.from_keyword_id   = saved_from_kw
+                    s.to_keyword_id     = saved_to_kw
+                    s.from_label        = saved_from_lbl
+                    s.to_label          = saved_to_lbl
+                    s.from_query        = saved_from_q
+                    s.to_query          = saved_to_q
+                    s.desired_from_text = saved_from_text
+                    s.desired_to_text   = saved_to_text
+                    route = f"{saved_from_lbl} → {saved_to_lbl}" if saved_from_lbl and saved_to_lbl else "your route"
+                    return self._ask(s, "departure_date",
+                        f"✅ Rebooking approved — previous booking released.\n\n🚌 *{route}*\n\nWhat date would you like to travel?")
 
                 # Guardrail: after booking, users sometimes tap old UI chips (e.g. "1")
                 # or the UI double-submits. Don't respond with a dead-end error.
                 if s.step in {"RESERVED", "PAYMENT_PENDING", "PAID"} and parse_choice_index(t) is not None:
-                    return self._say(s, "You're booked. Next: type **pay** to pay, **status** to check payment, or **reset** to start over.")
+                    return self._say(s, "You're all booked! Use the buttons to pay, cancel, or change — or type *status* to check payment.")
 
                 suggestion = _suggest_command(t)
                 if suggestion and suggestion != cmd:
@@ -2632,6 +2965,10 @@ class Orchestrator:
                     return await self._ensure_from_selected(s, t)
                 if not s.to_keyword_id:
                     return await self._ensure_to_selected(s, t)
+                # Destination known but departure city/terminal not yet confirmed —
+                # process user input as a departure answer (city or terminal name).
+                if s.to_keyword_id and not s.from_label:
+                    return await self._ensure_from_selected(s, t, _terminal_picker=True)
                 if s.departure_date and s.from_keyword_id and s.to_keyword_id:
                     return await self._advance_after_route_set(s)
 
@@ -2649,7 +2986,7 @@ class Orchestrator:
                 s,
                 "Flow: date → destination (TO) → departure (FROM) → tickets → choose trip → seats → reserve → pay\n"
                 "Commands: status, details, payinfo, show, reset.\n"
-                "Tip: You can type one line like: “Bangkok to Krabi tomorrow 1 pax”.",
+                "Tip: You can type one line like: 'Bangkok to Krabi tomorrow 1 pax'.",
             )
 
         if cmd.startswith("locale "):
@@ -2702,13 +3039,13 @@ class Orchestrator:
             return self._say(s, _json_preview(snap))
 
         if cmd in {"status", "details", "payinfo"} and not s.reservation_id:
-            return self._say(s, "No active reservation yet. Start with: “Bangkok to Krabi tomorrow 1 pax”.")
+            return self._say(s, "No active reservation yet. Start with: 'Bangkok to Krabi tomorrow 1 pax'.")
 
         if cmd == "status":
             try:
                 resp = await self._refresh_reservation_details(s)
             except Exception as e:
-                return self._say(s, "Sorry — status check failed.\n\n(debug) " + _dbg_exc(e))
+                return self._say(s, "Sorry  -  status check failed.\n\n(debug) " + _dbg_exc(e))
 
             payload = resp or s.busx_reservation_response
             pay = _extract_payment_block(payload)

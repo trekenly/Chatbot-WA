@@ -1,9 +1,9 @@
 """Channel rendering layer — WhatsApp-optimised.
 
 WhatsApp design principles applied here:
-  1. Seat map: ASCII bus grid (row × col), bold seat-number for available,
-     ⬛ for taken, │ aisle divider between col 2 and col 3.
-     Clean available-seats summary + reply instruction at the bottom.
+  1. Seat map: emoji bus grid — 🟩 available, ⬜ taken, │ aisle, 🚌 driver.
+     Row/col from API coordinates if available; inferred from labels (A3 → row 3
+     col 1) otherwise.  Clean available-seats summary + reply instruction below.
   2. Choices: interactive buttons for ≤ 3 options; interactive list for
      4-10 — title gets time+price (most scannable), description uses all
      72 chars for carrier, boarding point, seats left.
@@ -35,13 +35,113 @@ def _trunc(text: str, n: int) -> str:
 def _fmt_month_day(dt: datetime) -> str:
     return f"{dt.strftime('%b')} {dt.day}"
 
-def _date_buttons() -> List[Dict[str, str]]:
-    now = datetime.utcnow() + timedelta(hours=7)   # Bangkok time
-    t   = _fmt_month_day(now)
-    t1  = _fmt_month_day(now + timedelta(days=1))
+
+# ─── i18n button labels ───────────────────────────────────────────────────────
+# Keys: today, tomorrow, n_tickets(n), confirm, start_over
+# WhatsApp button title limit: 20 chars
+_I18N: Dict[str, Any] = {
+    "th": {
+        "today":      "วันนี้",
+        "tomorrow":   "พรุ่งนี้",
+        "n_tickets":  lambda n: f"{n} ตั๋ว",
+        "confirm":    "✅ ยืนยัน",
+        "start_over": "✖ เริ่มใหม่",
+    },
+    "zh": {
+        "today":      "今天",
+        "tomorrow":   "明天",
+        "n_tickets":  lambda n: f"{n} 张票",
+        "confirm":    "✅ 确认",
+        "start_over": "✖ 重新开始",
+    },
+    "ko": {
+        "today":      "오늘",
+        "tomorrow":   "내일",
+        "n_tickets":  lambda n: f"티켓 {n}장",
+        "confirm":    "✅ 확인",
+        "start_over": "✖ 다시 시작",
+    },
+    "ja": {
+        "today":      "今日",
+        "tomorrow":   "明日",
+        "n_tickets":  lambda n: f"{n} 枚",
+        "confirm":    "✅ 確認",
+        "start_over": "✖ やり直す",
+    },
+    "id": {
+        "today":      "Hari ini",
+        "tomorrow":   "Besok",
+        "n_tickets":  lambda n: f"{n} tiket",
+        "confirm":    "✅ Konfirmasi",
+        "start_over": "✖ Mulai ulang",
+    },
+    "ms": {
+        "today":      "Hari ini",
+        "tomorrow":   "Esok",
+        "n_tickets":  lambda n: f"{n} tiket",
+        "confirm":    "✅ Sahkan",
+        "start_over": "✖ Mulai semula",
+    },
+    "fr": {
+        "today":      "Aujourd'hui",
+        "tomorrow":   "Demain",
+        "n_tickets":  lambda n: f"{n} billet{'s' if n > 1 else ''}",
+        "confirm":    "✅ Confirmer",
+        "start_over": "✖ Recommencer",
+    },
+    "es": {
+        "today":      "Hoy",
+        "tomorrow":   "Mañana",
+        "n_tickets":  lambda n: f"{n} boleto{'s' if n > 1 else ''}",
+        "confirm":    "✅ Confirmar",
+        "start_over": "✖ Reiniciar",
+    },
+    "ru": {
+        "today":      "Сегодня",
+        "tomorrow":   "Завтра",
+        "n_tickets":  lambda n: f"{n} билет{'а' if n in {2,3,4} else '' if n==1 else 'ов'}",
+        "confirm":    "✅ Подтвердить",
+        "start_over": "✖ Заново",
+    },
+    # English default (also covers "en" explicit)
+    "en": {
+        "today":      "Today",
+        "tomorrow":   "Tomorrow",
+        "n_tickets":  lambda n: f"{n} ticket{'s' if n > 1 else ''}",
+        "confirm":    "✅ Confirm",
+        "start_over": "✖ Start over",
+    },
+}
+
+def _t(locale: str, key: str, *args: Any) -> str:
+    """Look up a UI string for the given locale, falling back to English."""
+    lang = (locale or "en")[:2].lower()
+    strings = _I18N.get(lang) or _I18N["en"]
+    val = strings.get(key) or _I18N["en"].get(key, key)
+    return val(*args) if callable(val) else str(val)
+
+def _detect_locale_from_text(text: str) -> str:
+    """Infer a 2-letter locale from Unicode script present in text."""
+    for ch in (text or ""):
+        cp = ord(ch)
+        if 0x0E00 <= cp <= 0x0E7F:   return "th"   # Thai
+        if 0xAC00 <= cp <= 0xD7AF:   return "ko"   # Korean Hangul
+        if 0x3040 <= cp <= 0x30FF:   return "ja"   # Japanese kana
+        if 0x4E00 <= cp <= 0x9FFF:   return "zh"   # CJK (Chinese/Japanese)
+        if 0x0400 <= cp <= 0x04FF:   return "ru"   # Cyrillic
+    return "en"
+
+
+def _date_buttons(locale: str = "en") -> List[Dict[str, str]]:
+    now  = datetime.utcnow() + timedelta(hours=7)   # Bangkok time
+    tmr  = now + timedelta(days=1)
+    d0   = f"{now.day}/{now.month}"
+    d1   = f"{tmr.day}/{tmr.month}"
     return [
-        {"id": now.strftime("%Y-%m-%d"),                    "title": f"Today ({t})"},
-        {"id": (now + timedelta(days=1)).strftime("%Y-%m-%d"), "title": f"Tomorrow ({t1})"},
+        {"id": now.strftime("%Y-%m-%d"),
+         "title": _trunc(f"{_t(locale, 'today')} ({d0})", 20)},
+        {"id": tmr.strftime("%Y-%m-%d"),
+         "title": _trunc(f"{_t(locale, 'tomorrow')} ({d1})", 20)},
     ]
 
 
@@ -49,120 +149,201 @@ def _date_buttons() -> List[Dict[str, str]]:
 # Seat-map rendering
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _parse_grid(ask: Ask) -> Tuple[List[Tuple[int, int, str, bool]], List[str]]:
-    """Parse seat data into (grid_cells, available_labels).
-    grid_cells: (row, col, label, is_available)
+def _label_to_pos(label: str) -> Optional[Tuple[int, int]]:
+    """'A3' → (row=3, col=1),  'B10' → (10, 2).  None if unparseable."""
+    m = re.match(r'^([A-Za-z]+)(\d+)', label.strip())
+    if not m:
+        return None
+    col_str, row_str = m.groups()
+    col = 0
+    for ch in col_str.upper():
+        col = col * 26 + (ord(ch) - ord('A') + 1)
+    return int(row_str), col
+
+
+# BusX object_code → internal type
+_OBJ_TYPE: Dict[str, str] = {
+    "seat":            "seat",
+    "driver":          "driver",
+    "stair":           "stair",
+    "walkway":         "walkway",    # the aisle
+    "toilet":          "toilet",
+    "empty":           "empty",
+    "extra_seat":      "seat",
+    "wheel_seat":      "seat",
+    "handycapped_seat": "seat",
+    "wheel":           "empty",
+}
+
+# How each non-seat cell renders in the WhatsApp grid (fixed 4-char wide slot)
+_OBJ_GLYPH: Dict[str, str] = {
+    "driver":   "🚌  ",
+    "stair":    "🪜  ",
+    "toilet":   "🚽  ",
+    "walkway":  " │  ",    # aisle column — rendered as │
+    "empty":    "    ",
+}
+
+
+def _parse_grid(ask: Ask) -> Tuple[
+    List[Tuple[int, int, str, str]],   # all_cells: (y, x, label, cell_type)
+    List[str],                          # available seat labels
+]:
+    """Parse BusX seat_layout_details into a full grid + available list.
+
+    Each cell is (row=y, col=x, label, cell_type).
+    cell_type: 'available' | 'taken' | 'walkway' | 'driver' | 'stair' | 'toilet' | 'empty'
+    Coordinates come directly from API fields y/x (BusX v2).
     """
     raw = ask.seats
-    cells: List[Tuple[int, int, str, bool]] = []
+    cells: List[Tuple[int, int, str, str]] = []
 
-    if isinstance(raw, dict):
-        for cell in raw.get("seat_layout_details") or []:
+    def _extract(items: list) -> None:
+        for cell in items:
             if not isinstance(cell, dict):
                 continue
-            if str(cell.get("object_code") or "").lower() != "seat":
-                continue
-            s = cell.get("object_code_seat") or {}
-            label = str(s.get("seat_number") or "").strip()
-            if not label:
-                continue
-            status = str(s.get("seat_status") or "").lower()
-            avail  = status in {"1", "available", "open"}
-            row = s.get("seat_row")    or cell.get("row")    or cell.get("pos_y") or 0
-            col = s.get("seat_column") or s.get("seat_col") or cell.get("column") or cell.get("pos_x") or 0
-            try: row = int(row)
-            except Exception: row = 0
-            try: col = int(col)
-            except Exception: col = 0
-            cells.append((row, col, label, avail))
+            obj = str(cell.get("object_code") or "").lower()
+            typ = _OBJ_TYPE.get(obj, "empty")
 
+            # API v2 uses y=row, x=col at the top-level cell
+            try: r = int(cell.get("y") or cell.get("seat_row") or cell.get("row") or 0)
+            except Exception: r = 0
+            try: c = int(cell.get("x") or cell.get("seat_col") or cell.get("col") or 0)
+            except Exception: c = 0
+
+            if typ == "seat":
+                s     = cell.get("object_code_seat") or {}
+                lbl   = str(s.get("seat_number") or "").strip()
+                if not lbl:
+                    continue
+                status = str(s.get("seat_status") or "").lower()
+                avail  = status in {"1", "available", "open"}
+                cells.append((r, c, lbl, "available" if avail else "taken"))
+            else:
+                cells.append((r, c, "", typ))
+
+    if isinstance(raw, dict):
+        flat = raw.get("seat_layout_details") or []
+        if flat:
+            _extract(flat)
         if not cells:
             for floor in raw.get("floor_details") or []:
                 for row_data in floor.get("seat_layout_details") or []:
-                    for cell in (row_data if isinstance(row_data, list) else [row_data]):
-                        if not isinstance(cell, dict):
-                            continue
-                        s = cell.get("object_code_seat") or cell
-                        label = str(s.get("seat_number") or s.get("label") or "").strip()
-                        if not label:
-                            continue
-                        status = str(s.get("seat_status") or "").lower()
-                        cells.append((0, 0, label, status in {"1", "available", "open"}))
-
+                    _extract(row_data if isinstance(row_data, list) else [row_data])
     elif isinstance(raw, list):
-        cells = [(0, 0, str(s).strip(), True) for s in raw if str(s).strip()]
+        # Plain list of seat labels — no coordinates
+        cells = [(0, 0, str(s).strip(), "available") for s in raw if str(s).strip()]
 
-    available = [lbl for _, _, lbl, a in cells if a]
+    available = [lbl for _, _, lbl, ct in cells if ct == "available"]
     return cells, available
 
 
 def _seatmap_text(ask: Ask) -> str:
-    """Render a compact, readable seat-map message for WhatsApp.
+    """Render an emoji bus-grid seat-map for WhatsApp.
 
-    If we have row/col coordinates → ASCII bus grid with aisle divider.
-    Otherwise → 4-column list of available seats.
-    Always appends available-seats summary + reply instruction.
+    Uses BusX x/y coordinates directly.  walkway columns become │ aisle.
+    🟩 open   ⬜ taken   🚌 driver   🪜 stairs   🚽 toilet
     """
     cells, available = _parse_grid(ask)
     pax      = int(ask.pax or 1)
     selected = list(ask.selected or [])
 
     header = ask.prompt or "Choose your seat"
-    lines: List[str] = [f"*{header}*"]
+    lines: List[str] = [f"*{header}*", ""]
 
     has_coords = any(r or c for r, c, _, _ in cells)
 
+    # ── Infer positions from seat labels when API gives no coordinates ─────
+    if not has_coords and cells:
+        inferred: List[Tuple[int, int, str, str]] = []
+        ok = True
+        for _, _, lbl, ct in cells:
+            if ct == "available":
+                pos = _label_to_pos(lbl)
+                if pos is None:
+                    ok = False
+                    break
+                inferred.append((pos[0], pos[1], lbl, ct))
+        if ok and inferred:
+            cells      = inferred
+            has_coords = True
+
+    # ── Full grid (monospace code block for perfect alignment) ───────────
     if has_coords and cells:
-        # Build grid: rows_dict[row][col] = (label, avail)
-        rows_dict: Dict[int, Dict[int, Tuple[str, bool]]] = {}
-        for r, c, lbl, a in cells:
-            rows_dict.setdefault(r, {})[c] = (lbl, a)
+        # Build grid dict: grid[row][col] = (label, cell_type)
+        grid: Dict[int, Dict[int, Tuple[str, str]]] = {}
+        for r, c, lbl, ct in cells:
+            grid.setdefault(r, {})[c] = (lbl, ct)
 
-        all_cols = sorted({c for _, c, _, _ in cells})
-        aisle_after = len(all_cols) // 2   # insert │ after this many cols
+        all_rows = sorted(grid)
+        all_cols = sorted({c for r in grid.values() for c in r})
 
-        lines.append("")
-        for row_idx in sorted(rows_dict):
-            row_cells = rows_dict[row_idx]
+        # Fixed cell width: wide enough for the longest seat label (min 3 for "DRV")
+        max_lbl = max(
+            (len(lbl) for _, _, lbl, ct in cells if ct in {"available", "taken"} and lbl),
+            default=2,
+        )
+        cw = max(max_lbl, 3)   # chars inside the brackets, e.g. 3 → "[A2 ]" is 5 chars wide
+
+        def _cell(lbl: str, ct: str) -> str:
+            """Return a fixed (cw+2)-char wide cell string — pure ASCII, no emoji."""
+            pad = (lbl or "")[:cw].ljust(cw)
+            if ct == "available":
+                return f"[{pad}]"
+            if ct == "taken":
+                return f"[{'--':^{cw}}]"   # [--] — universally understood as occupied
+            if ct == "walkway":
+                aisle = "|".center(cw)
+                return f" {aisle} "
+            if ct == "driver":
+                return f"[{'DRV':^{cw}}]"
+            if ct == "stair":
+                return f"[{'STR':^{cw}}]"
+            if ct == "toilet":
+                return f"[{'WC':^{cw}}]"
+            return " " * (cw + 2)   # empty
+
+        grid_lines: List[str] = []
+        for row_idx in all_rows:
+            row_data = grid[row_idx]
             parts: List[str] = []
-            for i, col_idx in enumerate(all_cols):
-                if i == aisle_after:
-                    parts.append("│")
-                entry = row_cells.get(col_idx)
-                if entry is None:
-                    parts.append("    ")
-                else:
-                    lbl, a = entry
-                    # Bold available seats (WA markdown), ⬛ for taken
-                    parts.append(f"*{lbl:>3}*" if a else "  ⬛")
-            lines.append("  " + " ".join(parts))
+            for col_idx in all_cols:
+                lbl, ct = row_data.get(col_idx, ("", "empty"))
+                parts.append(_cell(lbl, ct))
+            grid_lines.append(" ".join(parts))
 
+        lines.append("```")
+        lines.extend(grid_lines)
+        lines.append("```")
         lines.append("")
-        lines.append("_Bold = available   ⬛ = taken_")
+        lines.append("[A3] = open   [--] = taken   [DRV] = driver   [STR] = stairs")
 
+    # ── Fallback: simple emoji list ───────────────────────────────────────
     else:
-        # Fallback: 4-per-row compact list
+        avail_set  = set(available)
+        all_labels = [lbl for _, _, lbl, ct in cells if ct in {"available", "taken"} and lbl]
+        if not all_labels:
+            all_labels = available
+        for i in range(0, len(all_labels), 4):
+            row_lbls = all_labels[i: i + 4]
+            parts = [f"🟩{lbl}" if lbl in avail_set else f"⬜{lbl}" for lbl in row_lbls]
+            lines.append("  " + "   ".join(parts))
+        if not all_labels:
+            lines.append("  (no seat data)")
         lines.append("")
-        sliced = available[:40]
-        for i in range(0, len(sliced), 4):
-            row = sliced[i: i + 4]
-            left  = "   ".join(f"*{s}*" for s in row[:2])
-            right = "   ".join(f"*{s}*" for s in row[2:])
-            lines.append(f"  {left}   {right}" if right else f"  {left}")
-        if len(available) > 40:
-            lines.append(f"  … and {len(available) - 40} more")
+        lines.append("🟩 open   ⬜ taken")
 
-    # ── Summary + instruction ────────────────────────────────────────────────
+    # ── Summary + instruction ─────────────────────────────────────────────────
     lines.append("")
     if selected:
-        lines.append(f"Already selected: {', '.join(selected)}")
+        lines.append(f"Selected: {', '.join(selected)}")
 
     preview = ", ".join(available[:20])
     extra   = f" (+{len(available) - 20} more)" if len(available) > 20 else ""
     lines.append(f"✅ Available ({len(available)} seats): {preview}{extra}")
     lines.append("")
 
-    ex = ",".join(available[:pax]) if len(available) >= pax else ("12,13" if pax > 1 else "12")
+    ex = ",".join(available[:pax]) if len(available) >= pax else ("A3,B3" if pax > 1 else "A3")
     if pax == 1:
         lines.append(f"Reply with 1 seat number — e.g. *{ex}*")
     else:
@@ -228,7 +409,13 @@ def _enrich_options(options: List[AskOption]) -> List[AskOption]:
     result: List[AskOption] = []
     for opt in options:
         if re.search(r"\d{2}:\d{2}\s*[→>-]\s*\d{2}:\d{2}", opt.label or ""):
-            title, desc = _split_trip_label(opt.label, opt.description or "")
+            if "|" in (opt.label or ""):
+                # Old pipe-separated format — split and reformat
+                title, desc = _split_trip_label(opt.label, opt.description or "")
+            else:
+                # format_trip_option already split label/description correctly — preserve it
+                title = _trunc(opt.label or "", 24)
+                desc  = _trunc(opt.description or "", 72)
             result.append(AskOption(value=opt.value, label=title, description=desc))
         else:
             result.append(opt)
@@ -390,6 +577,13 @@ def render_whatsapp(env: ChatEnvelope, wa_to: str) -> Dict[str, Any]:
     # Strip all "You can type..." / "Or type..." nudges — users tap, not type.
     say = _strip_type_hints(env.say or (ask.prompt if ask else "") or "")
 
+    # ── Locale: chat_language (set by pipeline NLP) > session locale > detect ──
+    locale: str = (
+        env.state.get("chat_language") or   # "th", "zh", "ko" … from Claude NLP
+        env.state.get("locale") or          # session locale, usually "en_US"
+        ""
+    ).strip()[:2].lower() or _detect_locale_from_text(say)
+
     # ── 1. Seat map → ASCII grid ─────────────────────────────────────────────
     if ask and ask.type == "seatmap":
         return _wa_text(wa_to, _seatmap_text(ask))
@@ -401,22 +595,21 @@ def render_whatsapp(env: ChatEnvelope, wa_to: str) -> Dict[str, Any]:
         low = prompt.lower()
 
         if field in {"departure_date", "date", "travel_date"} or "date" in low:
-            return _wa_buttons(wa_to, prompt, _date_buttons())
+            return _wa_buttons(wa_to, prompt, _date_buttons(locale))
 
         if field in {"pax", "tickets", "ticket_count", "passengers"} or "how many" in low:
             return _wa_buttons(
                 wa_to, prompt,
-                [{"id": "1", "title": "1 ticket"},
-                 {"id": "2", "title": "2 tickets"},
-                 {"id": "3", "title": "3 tickets"}],
+                [{"id": str(n), "title": _t(locale, "n_tickets", n)} for n in (1, 2, 3)],
             )
 
         if field in {"confirm", "confirm_reservation", "confirmation"} or \
-                "confirm" in low or "reply yes" in low:
+                "reply yes" in low or \
+                re.search(r'\bconfirm\b(?!ation)', low):
             return _wa_buttons(
                 wa_to, prompt,
-                [{"id": "yes",   "title": "✅ Confirm"},
-                 {"id": "reset", "title": "✖ Start over"}],
+                [{"id": "yes",   "title": _t(locale, "confirm")},
+                 {"id": "reset", "title": _t(locale, "start_over")}],
             )
 
     # ── 3. Choice ────────────────────────────────────────────────────────────
@@ -424,7 +617,14 @@ def render_whatsapp(env: ChatEnvelope, wa_to: str) -> Dict[str, Any]:
         opts = _enrich_options(ask.options)
         n = len(opts)
 
-        if n <= 3:
+        # Trip options (time-format labels) always use list so description is
+        # visible inside the clickable row, even when there are only 1-3 trips.
+        is_trip_list = any(
+            re.search(r"\d{2}:\d{2}\s*[→>-]\s*\d{2}:\d{2}", o.label or "")
+            for o in opts
+        )
+
+        if n <= 3 and not is_trip_list:
             buttons = [{"id": o.value, "title": _trunc(o.label, 20)} for o in opts]
             body = say
             desc_lines = [
@@ -435,7 +635,7 @@ def render_whatsapp(env: ChatEnvelope, wa_to: str) -> Dict[str, Any]:
                 body = say + "\n\n" + "\n\n".join(desc_lines)
             return _wa_buttons(wa_to, body, buttons)
 
-        # 4-100 options: interactive list with context-aware labels
+        # Trip options + 4-100 options: interactive list with context-aware labels
         if n <= 100:
             btn_text, sec_title = _infer_list_context(say, opts)
             return _wa_list(wa_to, say, opts,
